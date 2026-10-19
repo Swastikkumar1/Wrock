@@ -102,8 +102,11 @@ WROCK/
 │           │   └── telemetry_overlay.ts   # Tactical manifest & diagnostics
 │           └── network/
 │               └── ws_client.ts           # WebSocket client
-├── run.ps1                                # 1-Click launcher (Starts app in borderless window)
+├── interface/
+│   └── floating_dock.py                   # Standalone Frameless Floating Desktop Arc-Reactor Dock
+├── run.ps1                                # 1-Click Windows launcher (Launches floating dock on screen)
 ├── run.sh                                 # 1-Click launcher for Linux / macOS
+├── stop.ps1                               # Clean process terminator (backend, HUD, floating dock)
 ├── docker-compose.yml                     # Multi-container deployment
 ├── requirements.txt                       # Python dependencies
 └── .env.example                           # Template environment configuration
@@ -117,7 +120,11 @@ WROCK/
 ```powershell
 .\run.ps1
 ```
-This automatically installs any dependencies, boots the backend on `http://localhost:8000`, and opens the holographic interface on `http://localhost:3000` (in a borderless native app window via Chrome or Edge if installed).
+This automatically boots the backend, launches the HUD service, and opens the **Floating Arc-Reactor Holographic Dock directly on your Windows desktop** (always-on-top, frameless, and positioned at the bottom-center of your screen).
+
+- **Always on Screen**: Stays floating over your active applications, code editor, and browsers.
+- **Double-Click Reactor**: Toggles between the Full Command Dock and a Minimalist Floating Arc-Reactor Orb.
+- **3D Satellite Map**: Click `🗺️ 3D MAP` directly on the dock (or run `.\run.ps1 -OpenBrowserMap`) to open the full Three.js God's Eye tactical satellite map in your browser.
 
 ---
 

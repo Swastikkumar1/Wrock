@@ -78,8 +78,10 @@ class GestureTracker:
         self.prev_scroll_y: Optional[float] = None
         self.prev_scroll_x: Optional[float] = None
 
-        # 4. Drag & Drop state
+        # 4. Drag & Drop and Double-Pinch Left Click state
         self.pinch_active: bool = False
+        self.was_index_pinching: bool = False
+        self.last_pinch_release_time: float = 0.0
 
         # Telemetry callback for HUD synchronization
         self.on_gesture_telemetry: Optional[Callable[[str, Dict[str, Any]], None]] = None
@@ -131,7 +133,7 @@ class GestureTracker:
         - Two-hand pinch zoom (Expand -> zoom in, contract -> zoom out)
         - Two-finger vertical scroll & horizontal scrub
         """
-        now = time.time()
+        now = hands[0].timestamp if hands and getattr(hands[0], 'timestamp', None) else time.time()
         num_hands = len(hands)
         telemetry = {
             "num_hands": num_hands,
@@ -145,6 +147,7 @@ class GestureTracker:
             if self.pinch_active:
                 self.pinch_active = False
                 self.input_controller.update_drag_state(False)
+            self.was_index_pinching = False
             self.last_two_hand_dist = None
             self.prev_scroll_y = None
             self.prev_scroll_x = None
@@ -285,27 +288,46 @@ class GestureTracker:
             self._emit_telemetry("RIGHT_CLICK", {"dist": pinch_middle_dist})
             return telemetry
 
-        # D. Left Click & Drag: Pinch Index finger to Thumb
+        # D. Double-Pinch Left Click & Drag: Pinch Index finger to Thumb twice within double-pinch window
         is_index_pinching = pinch_index_dist < pinch_thresh
         self.pinch_active = is_index_pinching
 
         # Update Drag & Drop (>500ms hold)
         self.input_controller.update_drag_state(is_index_pinching)
 
-        if is_index_pinching:
-            # If not yet dragging, trigger left click
-            if not self.input_controller.is_dragging:
+        is_pinch_start = is_index_pinching and not self.was_index_pinching
+        is_pinch_release = (not is_index_pinching) and self.was_index_pinching
+
+        if is_pinch_start:
+            double_pinch_window = getattr(settings, "DOUBLE_PINCH_WINDOW_SEC", 0.55)
+            # If a prior pinch was released recently within double_pinch_window -> Double Pinch = Left Click!
+            if self.last_pinch_release_time > 0 and (now - self.last_pinch_release_time) <= double_pinch_window:
                 self.input_controller.left_click()
                 telemetry["gesture"] = "LEFT_CLICK"
+                self._emit_telemetry("LEFT_CLICK", {"dist": pinch_index_dist})
+                self.last_pinch_release_time = 0.0  # Reset so subsequent third pinch doesn't click again immediately
             else:
+                telemetry["gesture"] = "PINCH_START"
+                self._emit_telemetry("PINCH_START", {"dist": pinch_index_dist})
+        elif is_index_pinching:
+            if self.input_controller.is_dragging:
                 telemetry["gesture"] = "DRAGGING"
+            elif telemetry["gesture"] != "LEFT_CLICK":
+                telemetry["gesture"] = "PINCH_HELD"
 
-        # E. Cursor Movement: Index Fingertip
-        # In mirrored webcam, x is already natural
-        sx, sy = self.input_controller.move_cursor(index_tip["x"], index_tip["y"])
-        telemetry["cursor"] = (sx, sy)
-        if telemetry["gesture"] == "IDLE":
-            telemetry["gesture"] = "CURSOR_MOVE"
+        if is_pinch_release:
+            self.last_pinch_release_time = now
+            telemetry["gesture"] = "PINCH_RELEASE"
+            self._emit_telemetry("PINCH_RELEASE", {"timestamp": now})
+
+        self.was_index_pinching = is_index_pinching
+
+        # E. Cursor Movement: Index Fingertip (only when pointing/extended or actively pinching/dragging)
+        if index_extended or self.pinch_active or self.input_controller.is_dragging:
+            sx, sy = self.input_controller.move_cursor(index_tip["x"], index_tip["y"])
+            telemetry["cursor"] = (sx, sy)
+            if telemetry["gesture"] == "IDLE":
+                telemetry["gesture"] = "CURSOR_MOVE"
 
         return telemetry
 

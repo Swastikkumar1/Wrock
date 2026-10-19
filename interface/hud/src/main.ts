@@ -30,8 +30,9 @@ class WrockApp {
     pinch_distance: 1.0,
   };
 
-  // Conversational Lifecycle State
-  private isAwake: boolean = false;
+  // Conversational Lifecycle State (Start active in LISTENING mode)
+  private isAwake: boolean = true;
+  private prevTwoHandDist: number | null = null;
   private clock: THREE.Clock;
 
   constructor() {
@@ -52,8 +53,8 @@ class WrockApp {
     this.commandDock = new CommandDockManager();
     this.wsClient = new SpatialWebSocketClient();
 
-    // Set initial asleep state
-    this.commandDock.setVoiceState("SLEEPING");
+    // Set initial ready state
+    this.commandDock.setVoiceState("LISTENING");
 
     this.bindEvents();
     this.initWakeControls();
@@ -115,18 +116,39 @@ class WrockApp {
       this.lastLandmarks = landmarks;
       this.lastGestureData = this.gestureRecognizer.processLandmarks(landmarks);
 
+      // A. Multi-Hand Zoom (when two hands are detected in camera frame)
+      let handledZoom = false;
+      if (multiHands && multiHands.length >= 2 && multiHands[0].length > 8 && multiHands[1].length > 8) {
+        const h1 = multiHands[0][8];
+        const h2 = multiHands[1][8];
+        const twoHandDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
+
+        if (this.prevTwoHandDist !== null) {
+          const delta = twoHandDist - this.prevTwoHandDist;
+          if (Math.abs(delta) > 0.003) {
+            const factor = 1.0 + delta * 2.2;
+            const currentZoom = this.scene.adjustZoom(factor);
+            this.commandDock.setPinchZoomIndicator(currentZoom, true);
+            handledZoom = true;
+          }
+        }
+        this.prevTwoHandDist = twoHandDist;
+      } else {
+        this.prevTwoHandDist = null;
+      }
+
+      // B. Single-Hand Continuous Pinch-To-Zoom (pinch-out -> zoom in, pinch-in -> zoom out)
       const isPinch =
-        this.handTracker.isPinchingNow ||
         this.lastGestureData.gesture === "PINCH_HOLD" ||
         this.lastGestureData.gesture === "PINCH_START";
 
       if (isPinch) {
-        // Optical pinch-to-zoom for map
-        if (this.lastGestureData.pinch_zoom_delta && Math.abs(this.lastGestureData.pinch_zoom_delta) > 0.003) {
-          const factor = 1.0 + this.lastGestureData.pinch_zoom_delta * 0.2;
+        if (!handledZoom && this.lastGestureData.pinch_zoom_delta && Math.abs(this.lastGestureData.pinch_zoom_delta) > 0.002) {
+          const factor = 1.0 + this.lastGestureData.pinch_zoom_delta * 0.32;
           const currentZoom = this.scene.adjustZoom(factor);
           this.commandDock.setPinchZoomIndicator(currentZoom, true);
-        } else {
+          handledZoom = true;
+        } else if (!handledZoom) {
           this.commandDock.setPinchZoomIndicator(this.scene.zoomLevel, true);
         }
 
@@ -137,7 +159,7 @@ class WrockApp {
             this.scene.adjustPan(dx, dy);
           }
         }
-      } else {
+      } else if (!handledZoom) {
         this.commandDock.setPinchZoomIndicator(this.scene.zoomLevel, false);
       }
 
@@ -161,12 +183,8 @@ class WrockApp {
       this.commandDock.setUserTranscript(transcript, !isFinal);
 
       // Stream real-time transcript to backend so AssistantLifecycle can handle
-      // wake-word, barge-in, and decoupled tool execution
+      // wake-word, barge-in, and decoupled tool execution exactly once
       this.wsClient.sendVoiceTranscript(transcript, isFinal);
-
-      if (isFinal) {
-        this.handleCommand(transcript);
-      }
     };
 
     // INSTANT SPEECH INTERRUPTION ("BARGE-IN"):
@@ -358,23 +376,29 @@ class WrockApp {
     }
 
     // -------------------------------------------------------------
-    // STRICT WAKE-WORD BEHAVIOR:
-    // If not awake, only initiate upon hearing "wake up wrock"
+    // WAKE-WORD & AUTO-WAKE DETECTION
+    // Matches variations like "wake up", "wake up block", "wake up wrock", "hey wrock"
     // -------------------------------------------------------------
-    const isWakePhrase = u.includes("wake up wrock") || u.includes("wake up rock") || u.includes("wake up brok");
+    const isWakePhrase =
+      /\bwake\s+up\b/i.test(u) ||
+      /\b(?:hey|hi|hello|ok|okay)\s+(?:wrock|rock|brok|block|lock|jarvis)\b/i.test(u) ||
+      /\b(?:wrock|rock|brok|block|jarvis)\s+wake\s+up\b/i.test(u) ||
+      /\b(wrock|jarvis)\b/i.test(u);
+
+    const hasActionableIntent =
+      /\b(open|launch|start|screenshot|status|laptop|battery|cpu|gpu|temp|volume|mute|unmute|lock|spotify|youtube|chrome|cursor|reddit|search|close|kill|turn off|turn off something|yes|do it|sure|zoom|map)\b/i.test(u);
 
     if (!this.isAwake) {
-      if (isWakePhrase) {
+      if (isWakePhrase || hasActionableIntent) {
         this.wakeUpWrock();
-        // Check if user spoke a command in the same breath (e.g. "wake up wrock take screenshot")
         const commandAfterWake = u
-          .replace(/^.*?\bwake\s+up\s+(wrock|rock|brok)\b[,:\s]*/i, "")
+          .replace(/^.*?\b(?:wake\s+up(?:\s+(?:wrock|rock|brok|block|lock|jarvis))?|(?:hey|hi|hello|ok|okay)\s+(?:wrock|rock|brok|block|jarvis))\b[,:\s]*/i, "")
           .trim();
-        if (commandAfterWake) {
-          this.handleCommand(commandAfterWake);
+        const finalCmd = commandAfterWake || (hasActionableIntent ? u : "");
+        if (finalCmd) {
+          this.handleCommand(finalCmd);
         }
       }
-      // Ignore other speech when asleep
       return;
     }
 
@@ -382,7 +406,7 @@ class WrockApp {
     this.commandDock.setVoiceState("THINKING");
 
     // Clean optional wake-word prefixes
-    const cleaned = u.replace(/^(hey\s+)?(wake\s+up\s+)?(wrock|rock|brok|jarvis)\b[,:\s]*/i, "").trim();
+    const cleaned = u.replace(/^(hey\s+)?(wake\s+up\s+)?(wrock|rock|brok|block|jarvis)\b[,:\s]*/i, "").trim();
     const targetCmd = cleaned || u;
 
     // Handle instant interrupt words

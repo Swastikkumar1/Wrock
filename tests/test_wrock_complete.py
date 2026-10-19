@@ -159,7 +159,7 @@ def test_os_input_drag_and_drop_state():
 
 
 def test_gesture_tracker_single_hand_pinches():
-    """Verify index pinch (left click) and middle pinch (right click)."""
+    """Verify double-pinch (two pinches in succession) triggers left click, and middle pinch triggers right click."""
     controller = OSInputController()
     tracker = GestureTracker(input_controller=controller)
 
@@ -170,23 +170,37 @@ def test_gesture_tracker_single_hand_pinches():
     lms[8] = {"x": 0.50, "y": 0.30, "z": 0.0}   # Index tip
     lms[12] = {"x": 0.55, "y": 0.30, "z": 0.0}  # Middle tip
 
+    base_time = 1000.0
+
     # 1. Normal hover / cursor move
-    hand_frame = HandPoseFrame(timestamp=time.time(), landmarks=lms, handedness="Right")
+    hand_frame = HandPoseFrame(timestamp=base_time, landmarks=lms, handedness="Right")
     t1 = tracker.process_hands([hand_frame])
     assert t1["gesture"] in ["CURSOR_MOVE", "IDLE"]
 
-    # 2. Index pinch (Left Click)
-    lms[4] = {"x": 0.50, "y": 0.31, "z": 0.0}   # Close thumb to index tip
-    lms[8] = {"x": 0.50, "y": 0.30, "z": 0.0}
-    t2 = tracker.process_hands([HandPoseFrame(timestamp=time.time(), landmarks=lms, handedness="Right")])
-    assert t2["gesture"] == "LEFT_CLICK"
+    # 2. First index pinch start -> PINCH_START (single pinch should NOT trigger left click yet)
+    lms_pinch = [{"x": 0.5, "y": 0.5, "z": 0.0} for _ in range(21)]
+    lms_pinch[4] = {"x": 0.50, "y": 0.31, "z": 0.0}   # Close thumb to index tip
+    lms_pinch[8] = {"x": 0.50, "y": 0.30, "z": 0.0}
+    lms_pinch[12] = {"x": 0.55, "y": 0.30, "z": 0.0}
+    t2 = tracker.process_hands([HandPoseFrame(timestamp=base_time + 0.05, landmarks=lms_pinch, handedness="Right")])
+    assert t2["gesture"] in ["PINCH_START", "PINCH_HELD"]
+    assert t2["gesture"] != "LEFT_CLICK"
 
-    # 3. Middle pinch (Right Click)
-    lms[8] = {"x": 0.40, "y": 0.30, "z": 0.0}   # Index open
-    lms[4] = {"x": 0.55, "y": 0.31, "z": 0.0}   # Close thumb to middle tip
-    lms[12] = {"x": 0.55, "y": 0.30, "z": 0.0}
-    t3 = tracker.process_hands([HandPoseFrame(timestamp=time.time(), landmarks=lms, handedness="Right")])
-    assert t3["gesture"] == "RIGHT_CLICK"
+    # 3. Release first pinch -> PINCH_RELEASE
+    t3 = tracker.process_hands([HandPoseFrame(timestamp=base_time + 0.15, landmarks=lms, handedness="Right")])
+    assert t3["gesture"] == "PINCH_RELEASE"
+
+    # 4. Second index pinch within double-pinch window (<0.55s) -> triggers LEFT_CLICK!
+    t4 = tracker.process_hands([HandPoseFrame(timestamp=base_time + 0.30, landmarks=lms_pinch, handedness="Right")])
+    assert t4["gesture"] == "LEFT_CLICK"
+
+    # 5. Middle pinch (Right Click)
+    lms_mid = [{"x": 0.5, "y": 0.5, "z": 0.0} for _ in range(21)]
+    lms_mid[8] = {"x": 0.40, "y": 0.30, "z": 0.0}   # Index open
+    lms_mid[4] = {"x": 0.55, "y": 0.31, "z": 0.0}   # Close thumb to middle tip
+    lms_mid[12] = {"x": 0.55, "y": 0.30, "z": 0.0}
+    t5 = tracker.process_hands([HandPoseFrame(timestamp=base_time + 1.0, landmarks=lms_mid, handedness="Right")])
+    assert t5["gesture"] == "RIGHT_CLICK"
 
     controller.shutdown()
     tracker.release()
@@ -303,6 +317,21 @@ def test_intent_router_chrome_map_spotify_youtube():
         res_chrome_search = await router.route_intent("go to chrome and search latest quantum computing", {})
         assert res_chrome_search.action_type == "CHROME_OPEN"
         assert "quantum" in res_chrome_search.spoken_text.lower()
+
+        # 5. Direct Google Maps requests (e.g. "just search for the google maps", "open google maps")
+        res_maps_conversational = await router.route_intent("just search for the google maps", {})
+        assert res_maps_conversational.action_type in ["CHROME_OPEN", "MAP_SEARCH"]
+        assert "google maps" in res_maps_conversational.spoken_text.lower()
+        assert res_maps_conversational.tool_results[0].arguments.get("query_or_url") == "https://maps.google.com"
+
+        res_open_maps = await router.route_intent("open google maps", {})
+        assert res_open_maps.action_type in ["CHROME_OPEN", "MAP_SEARCH"]
+        assert "google maps" in res_open_maps.spoken_text.lower()
+
+        # 6. Conversational General Search (strips 'just search for', does not search conversational filler)
+        res_clean_search = await router.route_intent("just search for artificial intelligence latest news", {})
+        assert res_clean_search.action_type == "CHROME_OPEN"
+        assert res_clean_search.tool_results[0].arguments.get("query_or_url") == "artificial intelligence latest news"
 
     asyncio.run(_run())
 

@@ -1,3 +1,7 @@
+param (
+    [switch]$DesktopDockOnly
+)
+
 # =====================================================================
 # PROJECT WROCK: NON-BLOCKING SPATIAL-AI & OS AUTOMATION LAUNCHER
 # User: Swastik
@@ -44,10 +48,19 @@ function Test-PortReady ($Port, $TimeoutSeconds = 25) {
     return $false
 }
 
+function Stop-DockProcess {
+    try {
+        Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%floating_dock.py%'" -ErrorAction SilentlyContinue | ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
+
 # 1. Clean previous stale processes
-Write-Host "[1/4] Ensuring clean ports (8000 & 3000)..." -ForegroundColor White
+Write-Host "[1/4] Ensuring clean ports (8000 & 3000) and dock processes..." -ForegroundColor White
 Stop-PortProcess 8000
 Stop-PortProcess 3000
+Stop-DockProcess
 
 # 2. Fast Dependency Check: only run install if node_modules is missing
 $hudNodeModules = Join-Path $CurrentDir "interface\hud\node_modules"
@@ -71,7 +84,7 @@ Write-Host "[3/4] Starting Holographic Arc-Reactor HUD Server..." -ForegroundCol
 $HudDir = Join-Path $CurrentDir "interface\hud"
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-Command", "cd '$HudDir'; npm run dev *> '$HudLog'"
 
-# 5. Wait for servers to be 100% verified online before launching browser
+# 5. Wait for servers to be 100% verified online before launching dock
 Write-Host "Verifying backend online (Port 8000)..." -NoNewline -ForegroundColor White
 $backendReady = Test-PortReady 8000 20
 if ($backendReady) {
@@ -88,24 +101,44 @@ if ($hudReady) {
     Write-Host " [INITIALIZING]" -ForegroundColor Yellow
 }
 
-# 6. Launch browser window in sleek app mode
-Write-Host "[4/4] Opening Holographic HUD Window..." -ForegroundColor Cyan
+# 6. Launch Unified Wrock Core: Holographic Sensory HUD & Floating Desktop Dock
+Write-Host "[4/4] Launching Wrock Core Interface..." -ForegroundColor Cyan
 
-$chromePath = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe" -ErrorAction SilentlyContinue).'(Default)'
-$edgePath = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe" -ErrorAction SilentlyContinue).'(Default)'
-
-if ($chromePath -and (Test-Path $chromePath)) {
-    Start-Process $chromePath -ArgumentList "--app=http://localhost:3000", "--window-size=1280,840"
-} elseif ($edgePath -and (Test-Path $edgePath)) {
-    Start-Process $edgePath -ArgumentList "--app=http://localhost:3000", "--window-size=1280,840"
+$DockProcess = $null
+if ($DesktopDockOnly) {
+    # Launch Always-on-Top Floating Arc-Reactor Desktop Dock (Overlays all Windows apps)
+    Write-Host "  -> Mode: Desktop Floating Arc-Reactor Dock" -ForegroundColor Green
+    $DockScript = Join-Path $CurrentDir "interface\floating_dock.py"
+    $DockProcess = Start-Process python -ArgumentList "`"$DockScript`"" -PassThru
 } else {
-    Start-Process "http://localhost:3000"
+    # Launch Unified Holographic Sensory HUD with embedded Arc-Reactor Command Dock, 3D Map, & Optical Tracking
+    Write-Host "  -> Mode: Holographic Sensory HUD with Middle-Bottom Command Dock" -ForegroundColor Green
+    $chromePath = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe" -ErrorAction SilentlyContinue).'(Default)'
+    $edgePath = (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe" -ErrorAction SilentlyContinue).'(Default)'
+
+    $browserArgs = @(
+        "--app=http://localhost:3000",
+        "--window-size=1280,840",
+        "--use-fake-ui-for-media-stream",
+        "--autoplay-policy=no-user-gesture-required"
+    )
+
+    if ($chromePath -and (Test-Path $chromePath)) {
+        Start-Process $chromePath -ArgumentList $browserArgs
+    } elseif ($edgePath -and (Test-Path $edgePath)) {
+        Start-Process $edgePath -ArgumentList $browserArgs
+    } else {
+        Start-Process "http://localhost:3000"
+    }
 }
 
 Write-Host "`n===========================================================" -ForegroundColor Cyan
 Write-Host "             WROCK IS ONLINE & READY, SWASTIK!            " -ForegroundColor Green
 Write-Host "===========================================================" -ForegroundColor Cyan
-Write-Host "  -> Holographic Interface: http://localhost:3000" -ForegroundColor White
+Write-Host "  -> Floating Arc-Reactor Dock: ACTIVE ON SCREEN (Bottom-Center)" -ForegroundColor Green
+Write-Host "  -> Always-on-Top: Floating over all desktop apps & windows" -ForegroundColor White
+Write-Host "  -> Double-Click Reactor: Collapse into Floating Mini Orb / Full Dock" -ForegroundColor Yellow
+Write-Host "  -> God's Eye 3D Map: Click '3D MAP' on dock or visit http://localhost:3000" -ForegroundColor White
 Write-Host "  -> Backend Intelligence:  http://localhost:8000" -ForegroundColor White
 Write-Host "  -> Say 'Wake up Wrock' ONCE to initiate." -ForegroundColor Yellow
 Write-Host "  -> Press Ctrl+C in this window to stop Wrock services." -ForegroundColor White
@@ -118,6 +151,10 @@ try {
     }
 } finally {
     Write-Host "`nShutting down Project Wrock services..." -ForegroundColor Yellow
+    Stop-DockProcess
+    if ($DockProcess -and -not $DockProcess.HasExited) {
+        Stop-Process -Id $DockProcess.Id -Force -ErrorAction SilentlyContinue
+    }
     Stop-PortProcess 8000
     Stop-PortProcess 3000
     Write-Host "All Wrock services stopped cleanly.`n" -ForegroundColor Green

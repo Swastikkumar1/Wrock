@@ -20,6 +20,8 @@ class WrockMemory:
         self.history: List[ConversationTurn] = []
         self.last_focused_entity_id: Optional[str] = None
         self.last_deployed_anchor: Optional[str] = None
+        self.pending_action: Optional[str] = None
+        self.pending_data: Dict[str, Any] = {}
 
     def add_turn(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         turn = ConversationTurn(role=role, content=content, metadata=metadata or {})
@@ -36,6 +38,8 @@ class WrockMemory:
     def clear(self) -> None:
         self.history.clear()
         self.last_focused_entity_id = None
+        self.pending_action = None
+        self.pending_data = {}
 
 # Alias for backward compatibility
 JarvisMemory = WrockMemory

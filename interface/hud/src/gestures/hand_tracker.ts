@@ -107,6 +107,17 @@ export class HandTracker {
     if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
       this.lastMultiHands = [];
       this.lastHandedness = [];
+      this.isPinchingNow = false;
+
+      // Clear overlay canvas
+      if (this.ctx && this.canvasEl) {
+        this.ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
+      }
+
+      // Notify callback that NO hands are present so cursor stays put!
+      if (this.onLandmarksCallback) {
+        this.onLandmarksCallback([], [], []);
+      }
       return;
     }
 
@@ -114,9 +125,10 @@ export class HandTracker {
     const handedness: string[] = [];
 
     for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+      // Natural Screen-Space Mirroring: moving hand right moves cursor right!
       const lms = results.multiHandLandmarks[i].map(pt => ({
-        x: pt.x,
-        y: pt.y,
+        x: Math.max(0, Math.min(1, 1.0 - pt.x)),
+        y: Math.max(0, Math.min(1, pt.y)),
         z: pt.z || 0,
       }));
       multiHands.push(lms);
@@ -246,11 +258,6 @@ export class HandTracker {
         this.mpHands.send({ image: this.videoEl })
           .catch((e) => console.debug("MediaPipe send warning:", e))
           .finally(() => { this.isMpProcessing = false; });
-      }
-
-      // 2. If MediaPipe has not detected hands yet, run fast optical fallback
-      if (this.lastMultiHands.length === 0 && this.cvCtx) {
-        this.runOpticalSkinTracking();
       }
     }
 

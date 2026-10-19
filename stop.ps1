@@ -17,7 +17,16 @@ function Stop-PortProcess ($Port) {
     } catch {}
 }
 
+function Stop-DockProcess {
+    try {
+        Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%floating_dock.py%'" -ErrorAction SilentlyContinue | ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
+
 Stop-PortProcess 8000
 Stop-PortProcess 3000
+Stop-DockProcess
 
 Write-Host "Project Wrock services stopped cleanly." -ForegroundColor Green

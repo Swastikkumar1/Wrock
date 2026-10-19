@@ -106,6 +106,10 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
         perception_state: Dict[str, Any]
     ) -> IntentResponse:
         u = utterance.lower()
+        map_match = re.search(r"\b(?:in\s+map\s+search|search\s+in\s+map|search\s+on\s+map|search\s+map\s+for|find\s+on\s+map|find\s+in\s+map|show\s+on\s+map|show\s+in\s+map|locate\s+on\s+map|locate\s+in\s+map|map\s+search)\s+(.+)", u)
+        if not map_match:
+            map_match = re.search(r"\b(?:search|find|show|locate|where\s+is)\s+(?:for\s+)?(.+?)\s+(?:in|on)\s+map\b", u)
+
         tools_executed: List[ToolCallResult] = []
         new_cam_mode: Optional[str] = None
         pov_entity: Optional[str] = None
@@ -124,7 +128,10 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             spoken = f"Live POV active for {pov_target}."
 
         # --- B. GOD'S EYE / SATELLITE TOP-DOWN VIEW ---
-        elif any(w in u for w in ["god's eye", "gods eye", "birds eye", "bird's eye", "open map", "show map", "satellite view", "edith view", "top down"]):
+        elif (
+            any(w in u for w in ["god's eye", "gods eye", "birds eye", "bird's eye", "satellite view", "edith view", "top down"]) or
+            (any(w in u for w in ["open map", "show map"]) and not any(g in u for g in ["google", "chrome", "search", "find", "locate", "where is"]))
+        ):
             res = self.tool_registry.execute_tool("set_camera_view", {"mode": "GODS_EYE"})
             tools_executed.append(res)
             new_cam_mode = "GODS_EYE"
@@ -184,11 +191,59 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             action_type = "VOLUME"
             spoken = res.output_message
 
-        # --- F. PC AUTOMATION: SYSTEM STATUS & BATTERY ---
-        elif any(w in u for w in ["system status", "pc status", "battery", "cpu", "ram", "hardware", "diagnostics of pc", "computer status"]):
+        # --- F. PC AUTOMATION: SYSTEM STATUS & BATTERY / LAPTOP STATUS ---
+        elif any(w in u for w in [
+            "laptop status", "laptop", "pc status", "system status", "battery", 
+            "battery temp", "cpu", "gpu", "ram", "hardware", "diagnostics", 
+            "temp", "temperature", "usage", "computer status", "specs", "how is my laptop",
+            "laptop health", "pc health", "resource usage"
+        ]):
             res = self.tool_registry.execute_tool("pc_system_status", {})
             tools_executed.append(res)
             action_type = "SYSTEM_STATUS"
+            spoken = res.output_message
+            self.memory.pending_action = "close_heavy_apps"
+
+        # --- F2. CONVERSATIONAL FOLLOW-UP CONFIRMATION ("yes", "turn off", "do it", "sure", "so do it know") ---
+        elif (
+            (self.memory.pending_action == "close_heavy_apps" and (
+                any(w in u.split() for w in ["yes", "yeah", "yep", "sure", "do", "turn", "close", "kill"]) or
+                any(phrase in u for phrase in ["turn off", "close them", "do it", "yes do it", "clean memory", "turn it off", "turn off something", "so do it now", "so do it know", "do it now"])
+            )) or
+            any(phrase in u for phrase in ["so do it now", "so do it know", "clean up the apps", "turn off background apps"])
+        ):
+            self.memory.pending_action = None
+            res = self.tool_registry.execute_tool("pc_close_heavy_apps", {})
+            tools_executed.append(res)
+            action_type = "CLOSE_PROCESSES"
+            spoken = res.output_message
+
+        elif self.memory.pending_action == "close_heavy_apps" and any(
+            w in u.split() for w in ["no", "nah", "don't", "dont", "leave it", "keep them", "cancel"]
+        ):
+            self.memory.pending_action = None
+            spoken = "Understood. Keeping all active applications and tabs running, Swastik."
+
+        # --- F3. PC AUTOMATION: CLOSE / TURN OFF APPLICATION ("off my chrome browser", "close chrome", "turn off chrome", "kill spotify") ---
+        elif (
+            any(w in u for w in ["turn off", "close", "shut down", "kill", "terminate", "exit", "quit", "off"]) and
+            any(app in u for app in ["chrome", "browser", "firefox", "edge", "spotify", "discord", "notepad", "calculator", "calc", "cursor", "steam", "slack", "tabs", "all apps"])
+        ) or re.search(r"\b(?:turn\s+off|close|shut\s+down|kill|exit|quit|terminate|off)\s+(?:my\s+)?(?:the\s+)?([a-z0-9_\-\.]+)\b", u):
+            close_match = re.search(
+                r"\b(?:turn\s+off|close|shut\s+down|kill|exit|quit|terminate|off)\s+(?:my\s+)?(?:the\s+)?([a-z0-9_\-\.\s]+?)(?:\s+browser|\s+app|\s+application)?\b",
+                u
+            )
+            raw_target = close_match.group(1).strip() if close_match else "chrome"
+            clean_app = re.sub(r"^(?:my|the)\s+", "", raw_target).strip()
+            clean_app = re.sub(r"\s+(?:browser|app|application)$", "", clean_app).strip()
+
+            if clean_app in ["it", "them", "this", "something", "heavy apps", "background", "apps", "processes", "tabs", "all"]:
+                res = self.tool_registry.execute_tool("pc_close_heavy_apps", {})
+                action_type = "CLOSE_PROCESSES"
+            else:
+                res = self.tool_registry.execute_tool("pc_close_application", {"app_name": clean_app})
+                action_type = "CLOSE_APPLICATION"
+            tools_executed.append(res)
             spoken = res.output_message
 
         # --- G. PC AUTOMATION: LOCK PC ---
@@ -198,19 +253,32 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             action_type = "LOCK_PC"
             spoken = res.output_message
 
-        # --- H. MAP LOCATION SEARCH ("in map search Tokyo", "search Paris on map") ---
-        map_match = re.search(r"\b(?:in\s+map\s+search|search\s+in\s+map|search\s+on\s+map|search\s+map\s+for|find\s+on\s+map|find\s+in\s+map|show\s+on\s+map|show\s+in\s+map|locate\s+on\s+map|locate\s+in\s+map|map\s+search)\s+(.+)", u)
-        if not map_match:
-            map_match = re.search(r"\b(?:search|find|show|locate|where\s+is)\s+(?:for\s+)?(.+?)\s+(?:in|on)\s+map\b", u)
+        # --- H. GOOGLE MAPS & MAP LOCATION SEARCH ("just search for the google maps", "search Paris on map", "open google maps") ---
+        elif any(m in u for m in ["google maps", "google map", "maps.google.com"]) or map_match or (
+            ("maps" in u or " map" in u) and any(w in u for w in ["search", "open", "go to", "launch", "find", "locate", "where is", "show"]) and not any(k in u for k in ["tactical", "god's eye", "gods eye", "orbit", "radar"])
+        ):
+            clean = u
+            clean = re.sub(r"^(?:just\s+|can\s+you\s+|could\s+you\s+|please\s+|i\s+said\s+(?:to\s+)?|i\s+said\s+him\s+to\s+)?", "", clean, flags=re.IGNORECASE).strip()
+            clean = re.sub(r"^(?:search(?:\s+for|\s+on|\s+in)?|open|go\s+to|launch|find|locate|where\s+is|show)\s+", "", clean, flags=re.IGNORECASE).strip()
+            clean = re.sub(r"^(?:the\s+)?(?:google\s+maps?|maps?)(?:\s+for)?\s*", "", clean, flags=re.IGNORECASE).strip()
+            clean = re.sub(r"\s+(?:on|in|at)\s+(?:the\s+)?(?:google\s+maps?|maps?)\b.*$", "", clean, flags=re.IGNORECASE).strip()
+            clean = re.sub(r"\b(?:on|in|at)\s+(?:chrome|browser)\b", "", clean, flags=re.IGNORECASE).strip()
+            clean = re.sub(r"^(?:for|the)\s+", "", clean, flags=re.IGNORECASE).strip()
+            clean = clean.strip(" ?.,!\"'")
 
-        if map_match:
-            raw_place = map_match.group(1).strip()
-            place = target_id or "Tactical Location" if raw_place in ["that place", "this place", "it", "here", "the place"] else raw_place.title()
-            res = self.tool_registry.execute_tool("search_map_location", {"location_name": place})
-            tools_executed.append(res)
-            action_type = "MAP_SEARCH"
-            new_cam_mode = "GODS_EYE"
-            spoken = res.output_message
+            if clean and clean not in ["google maps", "google map", "maps", "map", "it", "this", "that"]:
+                target_loc = clean.title()
+                res = self.tool_registry.execute_tool("search_map_location", {"location_name": target_loc})
+                tools_executed.append(res)
+                action_type = "MAP_SEARCH"
+                new_cam_mode = "GODS_EYE"
+                spoken = res.output_message
+            else:
+                res = self.tool_registry.execute_tool("open_chrome_or_search", {"query_or_url": "https://maps.google.com"})
+                tools_executed.append(res)
+                action_type = "CHROME_OPEN"
+                new_cam_mode = "GODS_EYE"
+                spoken = "Opening Google Maps on Chrome, Swastik."
 
         # --- I. SPOTIFY SEARCH & PLAY ("search something in spotify", "play ... on spotify") ---
         elif "spotify" in u:
@@ -236,9 +304,10 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
 
         # --- K. CHROME & WEB NAVIGATION ("open anything on chrome", "go to chrome", "search ... on chrome") ---
         elif any(k in u for k in ["on chrome", "in chrome", "go to chrome", "open chrome"]) or (
-            any(w in u for w in ["open", "go to", "launch", "search"]) and any(site in u for site in ["reddit", "github", "chatgpt", "openai", "twitter", "netflix", "amazon", "wikipedia", "wiki", "gmail", "facebook", "instagram", "linkedin", "discord", "twitch", "stackoverflow"])
+            any(w in u for w in ["open", "go to", "launch", "search"]) and any(site in u for site in ["reddit", "github", "chatgpt", "openai", "twitter", "netflix", "amazon", "wikipedia", "wiki", "gmail", "facebook", "instagram", "linkedin", "discord", "twitch", "stackoverflow", "huggingface"])
         ) or any(ext in u for ext in [".com", ".org", ".net", ".io", ".ai", ".co", ".gov", ".edu", ".app", ".dev"]):
             target = u
+            target = re.sub(r"^(?:just\s+|can\s+you\s+|could\s+you\s+|please\s+|i\s+said\s+(?:to\s+)?|i\s+want\s+to\s+)?", "", target, flags=re.IGNORECASE).strip()
             for prefix in [
                 r"^go\s+to\s+chrome\s+(and\s+)?(search\s+for|search)?\s*",
                 r"^open\s+chrome\s+(and\s+)?(search\s+for|search)?\s*",
@@ -252,15 +321,23 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
 
             target = re.sub(r"\s+(on|in)\s+chrome\b", "", target, flags=re.IGNORECASE).strip()
             target = re.sub(r"\s+(on|in)\s+browser\b", "", target, flags=re.IGNORECASE).strip()
+            target = re.sub(r"^(?:the\s+)", "", target, flags=re.IGNORECASE).strip()
+            target = target.strip(" ?.,!\"'")
 
             res = self.tool_registry.execute_tool("open_chrome_or_search", {"query_or_url": target})
             tools_executed.append(res)
             action_type = "CHROME_OPEN"
             spoken = res.output_message
 
-        # --- L. GENERAL GOOGLE SEARCH ---
-        elif any(w in u for w in ["search google for", "search google", "search the web for", "search web for", "google "]):
-            query = re.sub(r"^(search google for|search google|search the web for|search web for|google)\s*", "", u, flags=re.IGNORECASE).strip()
+        # --- L. GENERAL SEARCH & GOOGLE LOOKUP ("just search for ...", "search google for ...", "google ...", "search the web for ...") ---
+        elif any(w in u for w in ["search google for", "search google", "search the web for", "search web for", "google ", "search for ", "look up "]) or re.search(r"^(?:just\s+|can\s+you\s+|please\s+)?(?:search|google|look\s+up)\b", u):
+            query = u
+            query = re.sub(r"^(?:just\s+|can\s+you\s+|could\s+you\s+|please\s+|i\s+said\s+(?:to\s+)?|i\s+said\s+him\s+to\s+)?", "", query, flags=re.IGNORECASE).strip()
+            query = re.sub(r"^(?:search\s+google\s+for|search\s+google|search\s+the\s+web\s+for|search\s+web\s+for|search\s+for|search|google|look\s+up)\s+", "", query, flags=re.IGNORECASE).strip()
+            query = re.sub(r"^(?:the\s+)", "", query, flags=re.IGNORECASE).strip()
+            query = re.sub(r"\s+(?:on|in)\s+(?:google(?:\s+search)?|chrome|browser|web|the\s+web)$", "", query, flags=re.IGNORECASE).strip()
+            query = query.strip(" ?.,!\"'")
+
             res = self.tool_registry.execute_tool("open_chrome_or_search", {"query_or_url": query})
             tools_executed.append(res)
             action_type = "CHROME_OPEN"
@@ -345,20 +422,40 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             spoken = "Standing by for input."
             action_type = "CHAT"
 
-        elif any(w in u for w in ["who are you", "what is your name", "kaun ho", "tum kaun"]):
-            spoken = "Wrock Assistant."
+        elif any(w in u for w in ["who are you", "what is your name", "what is wrock", "world reset", "wrold reset", "reset on command", "kaun ho", "tum kaun"]):
+            spoken = "I am Wrock: World Reset On Command. Your autonomous spatial-AI assistant, Swastik."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["thank you", "thanks", "dhanyawad", "shukriya"]):
+            spoken = "Always at your service, Swastik."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["good job", "well done", "nice work", "awesome", "great"]):
+            spoken = "Thank you, Swastik. Systems running at peak efficiency."
             action_type = "CHAT"
 
         elif any(w in u for w in ["what can you do", "features", "kya kar sakte ho", "help"]):
-            spoken = "Navigation, camera gestures, map control, volume, screenshots, and OS automation."
+            spoken = "I control applications, manage system resources, capture screenshots, adjust volume, and navigate the 3D map. What shall we do, Swastik?"
             action_type = "CHAT"
 
         elif any(w in u for w in ["hello", "hey", "wrock", "hi", "hi rock", "hi wrock", "namaste", "suno"]):
-            spoken = "Ready."
+            spoken = "Online and standing by, Swastik."
             action_type = "CHAT"
 
+        elif any(phrase in u for phrase in ["so do it now", "so do it know", "do it now", "clean up now", "proceed", "go ahead"]):
+            res = self.tool_registry.execute_tool("pc_close_heavy_apps", {})
+            tools_executed.append(res)
+            action_type = "CLOSE_PROCESSES"
+            spoken = res.output_message
+
         else:
-            spoken = f"Acknowledged: {user_utterance.strip()}."
+            # Intelligent conversational response without echoing raw user text
+            if any(q in u for q in ["what", "how", "why", "when", "where", "can you"]):
+                spoken = "I can control applications, manage your system status, capture screenshots, and navigate the 3D map. What would you like me to do, Swastik?"
+            elif any(w in u for w in ["yes", "yeah", "yep", "sure", "ok", "okay"]):
+                spoken = "Confirmed, Swastik. What directive would you like executed?"
+            else:
+                spoken = "Standing by for your directive, Swastik."
             action_type = "CHAT"
 
         self.memory.add_turn("assistant", spoken)

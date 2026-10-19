@@ -23,9 +23,9 @@ class Settings(BaseSettings):
     VOICE_IDLE_TIMEOUT_SEC: float = 0.0  # 0.0 disables timeout; stays active once awakened
     SPEECH_CONFIDENCE_THRESHOLD: float = 0.70
     
-    # ElevenLabs TTS
-    ELEVENLABS_API_KEY: Optional[str] = "f9911bea0ea671a209614af60a0256293b404d7b3069cbe8cd45b83962c65f10"
-    ELEVENLABS_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel / Wrock persona
+    # ElevenLabs TTS (Deep, sophisticated British male voice - George / Stark-AI)
+    ELEVENLABS_API_KEY: Optional[str] = None
+    ELEVENLABS_VOICE_ID: str = "JBFqnCBsd6RMkjVDRZzb"  # George (British, warm, authoritative male AI)
     ELEVENLABS_MODEL_ID: str = "eleven_turbo_v2_5"
 
     # Spatial Scene & Telemetry Settings
@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     TWO_HAND_ZOOM_THRESHOLD: float = 0.035     # Euclidean delta for two-hand zoom
     SCROLL_SENSITIVITY: int = 35               # Wheel scroll speed per swipe frame
     SWIPE_VELOCITY_THRESHOLD: float = 0.07     # Horizontal velocity for single-hand wave
+    DOUBLE_PINCH_WINDOW_SEC: float = 0.55      # Time window to register two consecutive pinches as a double-pinch left click
 
     model_config = SettingsConfigDict(
         env_file=".env",

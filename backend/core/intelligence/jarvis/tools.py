@@ -201,6 +201,25 @@ class SpatialToolRegistry:
                 "parameters": {"type": "object", "properties": {}}
             },
             {
+                "name": "pc_close_heavy_apps",
+                "description": "Closes background or heavy applications and tabs to free up system memory.",
+                "parameters": {"type": "object", "properties": {}}
+            },
+            {
+                "name": "pc_close_application",
+                "description": "Terminates or turns off a designated application or browser by name (e.g. Chrome, Firefox, Edge, Spotify, Discord, Notepad, Calculator).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Name of the application or browser to close (e.g. 'chrome', 'browser', 'spotify', 'notepad')."
+                        }
+                    },
+                    "required": ["app_name"]
+                }
+            },
+            {
                 "name": "pc_lock_workstation",
                 "description": "Immediately locks the Windows PC screen for privacy/security.",
                 "parameters": {"type": "object", "properties": {}}
@@ -524,22 +543,88 @@ class SpatialToolRegistry:
         elif tool_name == "pc_system_status":
             try:
                 if psutil:
-                    cpu = psutil.cpu_percent(interval=0.2)
-                    ram = psutil.virtual_memory().percent
+                    cpu = psutil.cpu_percent(interval=0.15)
+                    vm = psutil.virtual_memory()
+                    ram_pct = vm.percent
+                    used_gb = round(vm.used / (1024**3), 1)
+                    total_gb = round(vm.total / (1024**3), 1)
+
+                    # Battery status
                     battery_str = ""
                     if hasattr(psutil, "sensors_battery"):
                         bat = psutil.sensors_battery()
                         if bat:
-                            plug = "Plugged in" if bat.power_plugged else "On battery"
-                            battery_str = f", Battery is at {bat.percent}% ({plug})"
-                    msg = f"PC Status Nominal: CPU load is {cpu}%, RAM utilization is {ram}%{battery_str}."
+                            plug_state = "plugged in" if bat.power_plugged else "on battery"
+                            battery_str = f", Battery is at {bat.percent}% ({plug_state})"
+
+                    # GPU and GPU Temperature
+                    gpu_str = ""
+                    try:
+                        res = subprocess.run(
+                            ["nvidia-smi", "--query-gpu=utilization.gpu,temperature.gpu", "--format=csv,noheader,nounits"],
+                            capture_output=True, text=True, timeout=1.0
+                        )
+                        if res.returncode == 0 and res.stdout.strip():
+                            parts = [p.strip() for p in res.stdout.strip().split(",")]
+                            if len(parts) >= 2:
+                                gpu_str = f", GPU load is {parts[0]}% at {parts[1]}°C"
+                    except Exception:
+                        pass
+
+                    # Detect top active user applications (excluding core Windows daemons)
+                    app_ram = {}
+                    for p in psutil.process_iter(['name', 'memory_percent']):
+                        try:
+                            n = p.info['name']
+                            if not n:
+                                continue
+                            n_lower = n.lower()
+                            if any(k in n_lower for k in ["svchost", "system", "registry", "smss", "csrss", "services", "lsass", "conhost", "explorer"]):
+                                continue
+                            app_ram[n] = app_ram.get(n, 0) + (p.info['memory_percent'] or 0)
+                        except Exception:
+                            pass
+
+                    top_apps = sorted(app_ram.items(), key=lambda x: x[1], reverse=True)[:3]
+                    app_names = []
+                    friendly_names = {
+                        "chrome.exe": "Google Chrome",
+                        "msedge.exe": "Microsoft Edge",
+                        "code.exe": "VS Code",
+                        "cursor.exe": "Cursor IDE",
+                        "antigravity ide.exe": "Antigravity IDE",
+                        "discord.exe": "Discord",
+                        "spotify.exe": "Spotify",
+                        "python.exe": "Python tasks",
+                        "wispr flow.exe": "Wispr Flow",
+                        "steam.exe": "Steam"
+                    }
+                    for app_proc, ram_usage in top_apps:
+                        fname = friendly_names.get(app_proc.lower(), app_proc.replace(".exe", "").title())
+                        if fname not in app_names:
+                            app_names.append(fname)
+
+                    apps_summary = f"You are currently running {', '.join(app_names)}." if app_names else ""
+                    follow_up = " Would you like me to close heavy background processes to free up memory?"
+
+                    msg = (
+                        f"Laptop Status: CPU is at {cpu}%, RAM is at {ram_pct}% ({used_gb} of {total_gb} GB used)"
+                        f"{battery_str}{gpu_str}. {apps_summary}{follow_up}"
+                    )
+
                     return ToolCallResult(
                         tool_name=tool_name,
                         arguments=args,
                         success=True,
                         output_message=msg,
                         affected_entity_ids=[],
-                        telemetry_payload={"cpu": cpu, "ram": ram},
+                        telemetry_payload={
+                            "cpu": cpu,
+                            "ram": ram_pct,
+                            "used_gb": used_gb,
+                            "total_gb": total_gb,
+                            "top_apps": app_names
+                        },
                         action_type="SYSTEM_STATUS"
                     )
                 else:
@@ -558,6 +643,126 @@ class SpatialToolRegistry:
                     output_message=f"System check error: {e}",
                     affected_entity_ids=[]
                 )
+
+        elif tool_name == "pc_close_heavy_apps":
+            try:
+                closed_count = 0
+                closed_names = []
+                target_names = ["msedge.exe", "discord.exe", "spotify.exe", "notepad.exe", "calc.exe"]
+                for p in psutil.process_iter(['name', 'pid', 'cmdline']):
+                    try:
+                        n = p.info['name']
+                        if not n:
+                            continue
+                        n_lower = n.lower()
+                        if "antigravity" in n_lower or "uvicorn" in str(p.info.get('cmdline', [])):
+                            continue
+                        if n_lower in target_names:
+                            p.terminate()
+                            closed_count += 1
+                            clean_n = n.replace(".exe", "").title()
+                            if clean_n not in closed_names:
+                                closed_names.append(clean_n)
+                    except Exception:
+                        pass
+
+                msg = f"Closed background applications ({', '.join(closed_names) if closed_names else 'idle background tasks'}). Memory freed, Swastik."
+                return ToolCallResult(
+                    tool_name=tool_name,
+                    arguments=args,
+                    success=True,
+                    output_message=msg,
+                    affected_entity_ids=[],
+                    action_type="PROCESSES_CLOSED"
+                )
+            except Exception as e:
+                return ToolCallResult(
+                    tool_name=tool_name,
+                    arguments=args,
+                    success=False,
+                    output_message=f"Process cleanup notice: {e}",
+                    affected_entity_ids=[]
+                )
+
+        elif tool_name == "pc_close_application":
+            raw_target = str(args.get("app_name", "")).strip().lower()
+            if not raw_target:
+                raw_target = "chrome"
+
+            # Clean prefixes/suffixes
+            clean_target = re.sub(r"^(?:my|the)\s+", "", raw_target).strip()
+            clean_target = re.sub(r"\s+(?:browser|app|application)$", "", clean_target).strip()
+
+            exe_mapping = {
+                "chrome": ["chrome.exe"],
+                "google chrome": ["chrome.exe"],
+                "browser": ["chrome.exe", "msedge.exe", "firefox.exe"],
+                "edge": ["msedge.exe"],
+                "microsoft edge": ["msedge.exe"],
+                "firefox": ["firefox.exe"],
+                "spotify": ["spotify.exe"],
+                "discord": ["discord.exe"],
+                "notepad": ["notepad.exe"],
+                "calc": ["calc.exe", "calculatorapp.exe"],
+                "calculator": ["calc.exe", "calculatorapp.exe"],
+                "cursor": ["cursor.exe"],
+                "steam": ["steam.exe"],
+                "slack": ["slack.exe"],
+            }
+
+            target_exes = exe_mapping.get(clean_target, [f"{clean_target}.exe", clean_target])
+            display_name = clean_target.title()
+            if "chrome" in clean_target:
+                display_name = "Google Chrome"
+
+            closed_count = 0
+            protected = ["python.exe", "uvicorn.exe", "node.exe", "explorer.exe", "antigravity"]
+
+            for p in psutil.process_iter(['name', 'pid', 'cmdline']):
+                try:
+                    pname = p.info['name']
+                    if not pname:
+                        continue
+                    pname_lower = pname.lower()
+
+                    if any(prot in pname_lower for prot in protected) or "uvicorn" in str(p.info.get('cmdline', [])):
+                        continue
+
+                    matched = False
+                    for t_exe in target_exes:
+                        if t_exe.lower() in pname_lower or pname_lower == t_exe.lower():
+                            matched = True
+                            break
+
+                    if matched:
+                        p.terminate()
+                        closed_count += 1
+                except Exception:
+                    pass
+
+            # If Windows and closed_count > 0, ensure forceful taskkill for clean termination
+            if sys.platform == "win32" and closed_count > 0:
+                for t_exe in target_exes:
+                    if t_exe.endswith(".exe"):
+                        try:
+                            import subprocess
+                            subprocess.run(["taskkill", "/F", "/IM", t_exe], capture_output=True, timeout=2)
+                        except Exception:
+                            pass
+
+            if closed_count > 0:
+                msg = f"{display_name} has been closed, Swastik."
+            else:
+                msg = f"{display_name} is not currently running, Swastik."
+
+            return ToolCallResult(
+                tool_name=tool_name,
+                arguments=args,
+                success=True,
+                output_message=msg,
+                affected_entity_ids=[],
+                action_type="PROCESS_CLOSED"
+            )
 
         elif tool_name == "pc_lock_workstation":
             try:
@@ -590,35 +795,47 @@ class SpatialToolRegistry:
                 )
 
         elif tool_name == "search_map_location":
-            location = args.get("location_name", "").strip() or "Tactical Coordinates"
-            maps_url = f"https://www.google.com/maps/search/{urllib.parse.quote_plus(location)}"
+            location = args.get("location_name", "").strip()
+            is_generic = (not location) or location.lower() in [
+                "google maps", "google map", "maps", "map", "the map", "the maps",
+                "the google maps", "tactical coordinates", "coordinates"
+            ]
+
+            if is_generic:
+                maps_url = "https://maps.google.com"
+                msg = "Opening Google Maps on Chrome, Swastik."
+            else:
+                maps_url = f"https://www.google.com/maps/search/{urllib.parse.quote_plus(location)}"
+                msg = f"Locating '{location}' on map. Coordinates locked on God's Eye satellite and Google Maps launched."
+
             self._open_url_in_chrome(maps_url)
 
             # Switch 3D tactical camera to God's Eye satellite perspective
             self.observer.set_mode(CameraPerspectiveMode.GODS_EYE)
 
-            # Deploy persistent spatial anchor on tactical grid
-            try:
-                anchor_id = f"LOC-{int(time.time()) % 10000}"
-                self.scene_graph.add_entity(
-                    id=anchor_id,
-                    name=f"LOC: {location.upper()}",
-                    entity_type=EntityType.WAYPOINT,
-                    position=[0.0, 0.0, 0.0],
-                    threat_level=ThreatLevel.FRIENDLY,
-                    telemetry={"location_name": location, "maps_url": maps_url}
-                )
-            except Exception as e:
-                logger.debug(f"Anchor addition error: {e}")
+            if not is_generic:
+                # Deploy persistent spatial anchor on tactical grid
+                try:
+                    anchor_id = f"LOC-{int(time.time()) % 10000}"
+                    self.scene_graph.add_entity(
+                        id=anchor_id,
+                        name=f"LOC: {location.upper()}",
+                        entity_type=EntityType.WAYPOINT,
+                        position=[0.0, 0.0, 0.0],
+                        threat_level=ThreatLevel.FRIENDLY,
+                        telemetry={"location_name": location, "maps_url": maps_url}
+                    )
+                except Exception as e:
+                    logger.debug(f"Anchor addition error: {e}")
 
             return ToolCallResult(
                 tool_name=tool_name,
                 arguments=args,
                 success=True,
-                output_message=f"Locating '{location}' on map. Coordinates locked on God's Eye satellite and Google Maps launched.",
+                output_message=msg,
                 affected_entity_ids=[],
                 new_camera_mode="GODS_EYE",
-                telemetry_payload={"location": location, "maps_url": maps_url},
+                telemetry_payload={"location": location or "Google Maps", "maps_url": maps_url},
                 action_type="MAP_SEARCH"
             )
 
@@ -693,6 +910,9 @@ class SpatialToolRegistry:
                 "stackoverflow": "https://stackoverflow.com",
                 "huggingface": "https://huggingface.co",
                 "maps": "https://maps.google.com",
+                "googlemaps": "https://maps.google.com",
+                "googlemap": "https://maps.google.com",
+                "map": "https://maps.google.com",
             }
             clean_key = target.lower().replace(" ", "").replace(".com", "")
             if clean_key in known_sites:

@@ -76,6 +76,10 @@ class AssistantLifecycle:
         self.last_user_activity: float = time.time()
         self.active_execution_task: Optional[asyncio.Task] = None
 
+        # Debounce state to prevent duplicate rapid executions
+        self._last_executed_cmd: str = ""
+        self._last_executed_time: float = 0.0
+
         # Barge-in keywords
         self.interrupt_words = {"stop", "cancel", "quiet", "hold on", "pause", "shut up", "silence", "wait"}
 
@@ -166,15 +170,17 @@ class AssistantLifecycle:
                 return None
 
         # ---------------------------------------------------------
-        # A. Sleeping State: Strict 'Wake up Wrock' Required
+        # A. Sleeping State: Wake-Phrase Required
+        # Matches "wake up", "wake up block", "wake up wrock", "hey wrock", etc.
         # ---------------------------------------------------------
         if self.state == LifecycleState.SLEEPING:
-            # Check for wake phrase ("wake up wrock" or "wake up rock")
-            is_wake = bool(re.search(r"\bwake\s+up\s+(wrock|rock|brok)\b", lower_text))
+            wake_regex = r"\b(?:wake\s+up(?:\s+(?:wrock|rock|brok|block|lock|work|doc|buddy|jarvis))?|(?:hey|hi|hello|ok|okay)\s+(?:wrock|rock|brok|block|jarvis))\b"
+            is_wake = bool(re.search(wake_regex, lower_text))
+
             if is_wake:
                 await self.wake_up()
-                # If command followed the wake phrase (e.g. "wake up wrock take screenshot")
-                command_after_wake = re.sub(r"^.*?\bwake\s+up\s+(wrock|rock|brok)\b[,:\s]*", "", lower_text).strip()
+                command_after_wake = re.sub(wake_regex + r"[,:\s]*", "", lower_text).strip()
+
                 if command_after_wake and is_final:
                     return await self.execute_command(command_after_wake, perception_snapshot)
                 return {"action": "woken", "reply": "Yes, I am online. What's your command, Swastik?"}
@@ -197,7 +203,7 @@ class AssistantLifecycle:
             return None
 
         # Strip optional wake phrase prefix if user happened to repeat it
-        cleaned_cmd = re.sub(r"^(hey\s+)?(wake\s+up\s+)?(wrock|rock|brok|jarvis)\b[,:\s]*", "", lower_text).strip()
+        cleaned_cmd = re.sub(r"^(hey\s+)?(wake\s+up\s+)?(wrock|rock|brok|block|jarvis)\b[,:\s]*", "", lower_text).strip()
         final_cmd = cleaned_cmd or lower_text
 
         return await self.execute_command(final_cmd, perception_snapshot)
@@ -205,18 +211,19 @@ class AssistantLifecycle:
     # -------------------------------------------------------------
     # 3. Activation & Conversational Conciseness
     # -------------------------------------------------------------
-    async def wake_up(self):
+    async def wake_up(self, silent: bool = False):
         """
         Initiates the assistant with clear, personalized confirmation.
         Responds: "Yes, I am online. What's your command, Swastik?"
         """
-        logger.info("Wrock initiated via 'Wake up Wrock'.")
+        logger.info("Wrock initiated via wake trigger.")
         self.cancellation_token.reset()
         self.last_user_activity = time.time()
         await self.set_state(LifecycleState.LISTENING)
 
-        reply_text = "Yes, I am online. What's your command, Swastik?"
-        await self.speak_direct(reply_text, play_wake_chime=True)
+        if not silent:
+            reply_text = "Yes, I am online. What's your command, Swastik?"
+            await self.speak_direct(reply_text, play_wake_chime=True)
 
     async def dismiss(self):
         """
@@ -241,7 +248,15 @@ class AssistantLifecycle:
         if not command_text.strip():
             return {"action": "none"}
 
-        self.last_user_activity = time.time()
+        now = time.time()
+        norm_cmd = command_text.strip().lower()
+        if norm_cmd == self._last_executed_cmd and (now - self._last_executed_time) < 2.0:
+            logger.info(f"Debounce: Ignoring duplicate execution of '{command_text}' within 2.0s window.")
+            return {"action": "debounced"}
+        self._last_executed_cmd = norm_cmd
+        self._last_executed_time = now
+
+        self.last_user_activity = now
         await self.set_state(LifecycleState.THINKING)
         self.cancellation_token.reset()
 

@@ -88,10 +88,17 @@ class OSInputController:
         target_x = clamped_x * self.screen_w
         target_y = clamped_y * self.screen_h
 
-        # Exponential Moving Average smoothing
-        alpha = getattr(settings, "SMOOTHING_FACTOR", 0.25)
-        self.smoothed_x = alpha * target_x + (1.0 - alpha) * self.smoothed_x
-        self.smoothed_y = alpha * target_y + (1.0 - alpha) * self.smoothed_y
+        # Velocity-adaptive smoothing: heavy smoothing on micro-movements, instant tracking on fast moves
+        dx = target_x - self.smoothed_x
+        dy = target_y - self.smoothed_y
+        dist = (dx * dx + dy * dy) ** 0.5
+
+        base_alpha = getattr(settings, "SMOOTHING_FACTOR", 0.15)
+        speed_factor = min(1.0, dist / 80.0)
+        alpha = base_alpha + (0.45 - base_alpha) * (speed_factor ** 2)
+
+        self.smoothed_x += alpha * dx
+        self.smoothed_y += alpha * dy
 
         # Deadzone threshold check against last emitted position
         deadzone = getattr(settings, "DEADZONE_PIXELS", 4.0)

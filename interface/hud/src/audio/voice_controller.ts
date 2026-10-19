@@ -37,12 +37,67 @@ export class VoiceController {
     if (!this.synth) return;
     const updateVoices = () => {
       const voices = this.synth!.getVoices();
+      if (!voices || voices.length === 0) return;
+
+      const isExplicitFemale = (v: SpeechSynthesisVoice) => {
+        const n = v.name.toLowerCase();
+        return (
+          n.includes("female") ||
+          n.includes("zira") ||
+          n.includes("jenny") ||
+          n.includes("aria") ||
+          n.includes("susan") ||
+          n.includes("hazel") ||
+          n.includes("heera") ||
+          n.includes("victoria") ||
+          n.includes("samantha") ||
+          n.includes("karen") ||
+          n.includes("catherine") ||
+          n.includes("linda")
+        );
+      };
+
+      const isMaleVoice = (v: SpeechSynthesisVoice) => {
+        if (isExplicitFemale(v)) return false;
+        const n = v.name.toLowerCase();
+        return (
+          n.includes("male") ||
+          n.includes("george") ||
+          n.includes("ryan") ||
+          n.includes("guy") ||
+          n.includes("david") ||
+          n.includes("mark") ||
+          n.includes("daniel") ||
+          n.includes("oliver") ||
+          n.includes("arthur") ||
+          n.includes("james") ||
+          n.includes("christopher") ||
+          n.includes("eric") ||
+          n.includes("brian") ||
+          n.includes("alex") ||
+          n.includes("uk english male")
+        );
+      };
+
+      // Priority ranking: British/American Natural Male Voice (Jarvis style)
       this.preferredVoice =
-        voices.find(v => v.lang.includes("en-GB") && v.name.toLowerCase().includes("male")) ||
-        voices.find(v => v.name.includes("Daniel") || v.name.includes("George") || v.name.includes("Oliver")) ||
-        voices.find(v => v.lang.startsWith("en")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("Natural") && v.lang.includes("en-GB")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("George")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("UK English Male")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("Daniel")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("Ryan")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("Guy")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("David")) ||
+        voices.find(v => isMaleVoice(v) && v.name.includes("Mark")) ||
+        voices.find(v => isMaleVoice(v) && v.lang.startsWith("en")) ||
+        voices.find(v => isMaleVoice(v)) ||
+        voices.find(v => v.lang.startsWith("en") && !isExplicitFemale(v)) ||
         voices[0] ||
         null;
+
+      if (this.preferredVoice) {
+        console.log(`[WROCK-VOICE] Selected male persona voice: ${this.preferredVoice.name} (${this.preferredVoice.lang})`);
+      }
     };
     updateVoices();
     if (this.synth.onvoiceschanged !== undefined) {
@@ -396,8 +451,8 @@ export class VoiceController {
     if (this.preferredVoice) {
       utterance.voice = this.preferredVoice;
     }
-    utterance.pitch = 0.98;
-    utterance.rate = 1.08;
+    utterance.pitch = 0.92; // Deep, commanding resonant tone
+    utterance.rate = 1.02;  // Articulate, confident cadence
 
     utterance.onstart = () => {
       this.isSpeaking = true;
