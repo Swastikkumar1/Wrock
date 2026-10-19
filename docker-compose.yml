@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wrock_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - LLM_PROVIDER=mock
+      - WAKE_WORD=wrock
+      - SCENE_UPDATE_RATE_HZ=30
+    restart: unless-stopped
+
+  hud_frontend:
+    image: node:20-alpine
+    container_name: wrock_hud
+    working_dir: /app
+    volumes:
+      - ./interface/hud:/app
+    ports:
+      - "3000:3000"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+    restart: unless-stopped

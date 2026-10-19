@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WROCK — AI Assistant & Spatial Core</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <!-- 3D Spatial Map Canvas (Three.js) -->
+  <canvas id="viewport-canvas"></canvas>
+
+  <!-- Top Clean Header Bar -->
+  <header class="clean-top-bar">
+    <div class="brand-group">
+      <div class="mini-arc-reactor"></div>
+      <div class="brand-text">
+        <span class="brand-name">WROCK</span>
+        <span class="brand-tag">AI ASSISTANT</span>
+      </div>
+    </div>
+
+    <div class="top-status-group">
+      <div class="status-indicator-pill" id="hud-conn-status">
+        <span class="status-dot"></span>
+        <span class="status-label">ONLINE</span>
+      </div>
+      <button id="btn-wake-toggle" class="wake-btn" title="Click or say 'Wake up Wrock' to awaken">
+        ⚡ WAKE UP WROCK
+      </button>
+    </div>
+  </header>
+
+  <!-- Optical Hand & Finger Tracking PIP (Bottom-Left) -->
+  <div class="webcam-pip-container" id="webcam-container">
+    <div class="pip-header">
+      <span>🖐️ OPTICAL FINGER TRACKER</span>
+      <span class="pip-fps" id="tracker-fps">60 FPS</span>
+    </div>
+    <video id="webcam-video" autoplay playsinline muted></video>
+    <canvas id="webcam-canvas"></canvas>
+    <div class="pip-hint" id="pip-hint">RAISE HAND & PINCH TO ZOOM</div>
+  </div>
+
+  <!-- PC CONTROLS POPUP MENU -->
+  <div class="pc-controls-menu" id="pc-controls-menu">
+    <div class="pc-menu-header">
+      <span>PC AUTOMATION ACTIONS</span>
+      <button class="pc-menu-close" id="btn-close-pc-menu">✕</button>
+    </div>
+    <div class="pc-actions-grid">
+      <button class="pc-action-btn" data-cmd="take screenshot">
+        <span class="icon">📸</span>
+        <span class="lbl">Screenshot</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="system status">
+        <span class="icon">⚡</span>
+        <span class="lbl">PC Status</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="volume up">
+        <span class="icon">🔊</span>
+        <span class="lbl">Vol Up</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="volume down">
+        <span class="icon">🔉</span>
+        <span class="lbl">Vol Down</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="mute">
+        <span class="icon">🔇</span>
+        <span class="lbl">Mute</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="lock pc">
+        <span class="icon">🔒</span>
+        <span class="lbl">Lock PC</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="open chrome">
+        <span class="icon">🌐</span>
+        <span class="lbl">Chrome</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="open youtube">
+        <span class="icon">▶️</span>
+        <span class="lbl">YouTube</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="open cursor">
+        <span class="icon">💻</span>
+        <span class="lbl">Cursor IDE</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="open spotify">
+        <span class="icon">🎵</span>
+        <span class="lbl">Spotify</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="search Tokyo on map">
+        <span class="icon">🗺️</span>
+        <span class="lbl">Map Search</span>
+      </button>
+      <button class="pc-action-btn" data-cmd="open reddit">
+        <span class="icon">🤖</span>
+        <span class="lbl">Reddit</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- HERO: FLOATING MIDDLE-BOTTOM WROCK COMMAND DOCK                 -->
+  <!-- ============================================================== -->
+  <div class="middle-bottom-dock" id="middle-bottom-dock">
+    <!-- Left: Glowing Animated Arc-Reactor AI Core -->
+    <div class="dock-reactor-wrapper" id="reactor-trigger-wrapper" title="Click to wake up / interact with Wrock">
+      <canvas id="dock-arc-reactor" width="70" height="70"></canvas>
+    </div>
+
+    <!-- Center: Voice Status, Equalizer, Ticker, and Command Input -->
+    <div class="dock-center-info">
+      <div class="dock-top-row">
+        <div class="voice-status-pill status-sleeping" id="dock-voice-status">
+          <span class="pulse-dot idle"></span> ASLEEP (SAY "WAKE UP WROCK")
+        </div>
+        <div class="equalizer-container" id="dock-audio-bars">
+          <!-- 12 animated dynamic bars -->
+        </div>
+        <div class="pinch-zoom-pill" id="dock-pinch-indicator">
+          🖐️ PINCH ZOOM: 1.00x
+        </div>
+      </div>
+
+      <div class="dock-dialogue-row">
+        <div class="dialogue-line user-line" id="dock-user-transcript">
+          Say "Wake up Wrock" to activate (e.g. "Take screenshot", "Volume up", "Open Chrome")...
+        </div>
+        <div class="dialogue-line wrock-line" id="dock-wrock-response">
+          "Standing by."
+        </div>
+      </div>
+
+      <div class="dock-input-row">
+        <input type="text" id="dock-cmd-input" placeholder="Speak or type command (e.g. 'wake up wrock', 'take screenshot', 'volume up')..." autocomplete="off" />
+        <button id="btn-dock-send" class="dock-send-btn">SEND ⚡</button>
+      </div>
+    </div>
+
+    <!-- Right: Clean Action Controls -->
+    <div class="dock-quick-actions">
+      <button class="dock-action-pill glow-cyan" id="btn-toggle-cam" title="Toggle Optical Finger Tracking for map pinch-to-zoom">
+        <span class="pill-icon">🖐️</span> <span class="pill-text">PINCH GESTURES</span>
+      </button>
+      <button class="dock-action-pill" id="btn-toggle-gods-eye" title="Reset or Center God's Eye Map">
+        <span class="pill-icon">🛰️</span> <span class="pill-text">MAP</span>
+      </button>
+      <button class="dock-action-pill" id="btn-toggle-pc-menu" title="Open PC Automation Actions">
+        <span class="pill-icon">💻</span> <span class="pill-text">PC ACTIONS</span>
+      </button>
+      <button class="dock-action-pill glow-cyan" id="btn-dock-mic" title="Microphone listening status. Click to toggle voice commands.">
+        <span class="pill-icon">🎙️</span> <span class="pill-text">MIC ACTIVE</span>
+      </button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

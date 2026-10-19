@@ -4,3 +4,7 @@
 __pycache__/
 *.pyc
 wrock.zip
+node_modules/
+dist/
+.vite/
+logs/
