@@ -1,8 +1,10 @@
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 import httpx
 import json
 import logging
+import random
 import re
 from .tools import SpatialToolRegistry, ToolCallResult
 from .memory import WrockMemory
@@ -37,6 +39,7 @@ class WrockIntentRouter:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-4o",
         gemini_api_key: Optional[str] = None,
+        gemini_model: str = "gemini-1.5-flash",
         ollama_host: str = "http://localhost:11434",
         ollama_model: str = "llama3"
     ):
@@ -46,6 +49,7 @@ class WrockIntentRouter:
         self.openai_api_key = openai_api_key
         self.openai_model = openai_model
         self.gemini_api_key = gemini_api_key
+        self.gemini_model = gemini_model
         self.ollama_host = ollama_host
         self.ollama_model = ollama_model
 
@@ -57,10 +61,11 @@ class WrockIntentRouter:
         scene_summary = perception_state.get("scene_graph_summary", {})
         entity_ids = scene_summary.get("entity_ids", [])
 
-        prompt = f"""You are WROCK, a high-speed, direct Multimodal Spatial-AI Assistant & OS Automation Core serving Swastik.
-You have real-time perception over a 3D tactical map, drone feeds, hand tracking gestures, and Windows PC automation.
+        prompt = f"""You are WROCK: World Reset On Command, an elite, ultra-sharp Spatial-AI Assistant & OS Automation Core created by Swastik.
+Your persona is articulate, direct, brilliant, and confident like Tony Stark's AI and Antigravity.
+You command a 3D tactical map, live reconnaissance drone feeds, webcam hand gesture recognition, and complete Windows desktop automation.
 
-[CURRENT CONTEXT]
+[CURRENT TELEMETRY]
 - Primary User: Swastik
 - Camera Perspective: {camera_mode}
 - User Hand Gesture: {gestures}
@@ -70,10 +75,10 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
 - Total Tracked Signatures: {scene_summary.get('total_entities', 0)}
 
 [CORE DIRECTIVES]
-1. USER: Swastik. Address the user as Swastik. Never refer to the user as King.
-2. PERSONA: Minimal, direct, functional. Zero filler, no canned pleasantries or conversational padding.
-3. PC AUTOMATION & WEB: Execute requested OS actions, app launches, Chrome web navigation, YouTube playback, Spotify searches, and map locations immediately.
-4. ADAPTIVE CONCISENESS: Output short, clear confirmations (e.g. 'Screenshot saved.', 'Yes, I am online. What\'s your command, Swastik?', 'Searching Spotify for daft punk.').
+1. USER: Always address Swastik by name (or 'Swastik bhai' when he speaks Hinglish/Hindi). Never refer to the user as King.
+2. PERSONA: Articulate, confident, witty, loyal, and direct. Zero robotic boilerplate, zero canned pleasantries or conversational padding.
+3. VOICE SYNTHESIS READY: Keep answers concise (1-2 spoken sentences). NEVER output markdown asterisks, hashtags, or bullet points in spoken responses so voice synthesis sounds crisp and natural.
+4. PC AUTOMATION & WEB: Execute requested OS actions, app launches, Chrome web navigation, YouTube playback, Spotify searches, and map locations immediately.
 5. DEICTIC BINDING: Resolve 'this', 'that', 'it', or 'here' to '{hovered or selected or 'DRONE-STARK-01'}'.
 """
         return prompt
@@ -91,13 +96,26 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
         target_candidate = hovered_id or selected_id or self.memory.last_focused_entity_id
 
         # 1. External LLM if configured
-        if self.llm_provider == "openai" and self.openai_api_key:
+        if self.llm_provider == "gemini" and self.gemini_api_key:
+            return await self._route_gemini(utterance, perception_state, target_candidate)
+        elif self.llm_provider == "openai" and self.openai_api_key:
             return await self._route_openai(utterance, perception_state, target_candidate)
         elif self.llm_provider == "ollama":
             return await self._route_ollama(utterance, perception_state, target_candidate)
 
         # 2. Fast Deterministic Spatial & PC Automation Engine (<10ms latency)
-        return self._route_heuristic(utterance, target_candidate, perception_state)
+        resp = self._route_heuristic(utterance, target_candidate, perception_state)
+
+        # If conversational query and Gemini API key is available, leverage Gemini for conversational depth
+        if resp.action_type == "CHAT" and self.gemini_api_key and len(utterance.split()) >= 3:
+            try:
+                gemini_resp = await self._route_gemini(utterance, perception_state, target_candidate)
+                if gemini_resp and gemini_resp.spoken_text:
+                    return gemini_resp
+            except Exception as e:
+                logger.debug(f"Gemini conversational fallback skipped: {e}")
+
+        return resp
 
     def _route_heuristic(
         self,
@@ -106,9 +124,18 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
         perception_state: Dict[str, Any]
     ) -> IntentResponse:
         u = utterance.lower()
+
+        # --- 0. INSTANT USER INTERRUPT & SILENCE COMMANDS ---
+        if re.search(r"^\s*(?:please\s+)?(?:stop(?:\s+it|\s+that|\s+talking|\s+now)?|shut\s+up|silence|quiet|cancel|hold\s+on|pause|ruk\s+jao|bas\s+karo)\s*$", u):
+            return IntentResponse(
+                spoken_text="Stopped.",
+                action_type="INTERRUPT",
+                hud_alert="Playback stopped."
+            )
+
         map_match = re.search(r"\b(?:in\s+map\s+search|search\s+in\s+map|search\s+on\s+map|search\s+map\s+for|find\s+on\s+map|find\s+in\s+map|show\s+on\s+map|show\s+in\s+map|locate\s+on\s+map|locate\s+in\s+map|map\s+search)\s+(.+)", u)
         if not map_match:
-            map_match = re.search(r"\b(?:search|find|show|locate|where\s+is)\s+(?:for\s+)?(.+?)\s+(?:in|on)\s+map\b", u)
+            map_match = re.search(r"\b(?:search|find|show|locate|where\s+is)\s+(?:for\s+)?(.+?)\s+(?:in|on)\s+(?:google\s+)?maps?\b", u)
 
         tools_executed: List[ToolCallResult] = []
         new_cam_mode: Optional[str] = None
@@ -258,8 +285,18 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             ("maps" in u or " map" in u) and any(w in u for w in ["search", "open", "go to", "launch", "find", "locate", "where is", "show"]) and not any(k in u for k in ["tactical", "god's eye", "gods eye", "orbit", "radar"])
         ):
             clean = u
-            clean = re.sub(r"^(?:just\s+|can\s+you\s+|could\s+you\s+|please\s+|i\s+said\s+(?:to\s+)?|i\s+said\s+him\s+to\s+)?", "", clean, flags=re.IGNORECASE).strip()
-            clean = re.sub(r"^(?:search(?:\s+for|\s+on|\s+in)?|open|go\s+to|launch|find|locate|where\s+is|show)\s+", "", clean, flags=re.IGNORECASE).strip()
+            # Strip conversational lead-ins repeatedly
+            prev_len = -1
+            while len(clean) != prev_len:
+                prev_len = len(clean)
+                clean = re.sub(
+                    r"^(?:i\s+(?:said|told|asked)(?:\s+(?:him|her|you|wrock))?\s+(?:to\s+)?|just\s+|can\s+you\s+(?:please\s+)?|could\s+you\s+(?:please\s+)?|please\s+|i\s+want\s+(?:you\s+)?to\s+|wrock\s+|jarvis\s+)",
+                    "", clean, flags=re.IGNORECASE
+                ).strip()
+                clean = re.sub(
+                    r"^(?:search(?:\s+for|\s+on|\s+in)?|open|go\s+to|launch|find|locate|where\s+is|show)\s+",
+                    "", clean, flags=re.IGNORECASE
+                ).strip()
             clean = re.sub(r"^(?:the\s+)?(?:google\s+maps?|maps?)(?:\s+for)?\s*", "", clean, flags=re.IGNORECASE).strip()
             clean = re.sub(r"\s+(?:on|in|at)\s+(?:the\s+)?(?:google\s+maps?|maps?)\b.*$", "", clean, flags=re.IGNORECASE).strip()
             clean = re.sub(r"\b(?:on|in|at)\s+(?:chrome|browser)\b", "", clean, flags=re.IGNORECASE).strip()
@@ -380,8 +417,28 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             action_type = "CLOSE_WINDOW"
             spoken = res.output_message
 
-        # --- I. SPATIAL: INSPECT / LOCK / RADAR / ANCHOR ---
-        elif any(w in u for w in ["inspect", "analyze", "scan this", "what is this", "diagnostics", "who is that"]):
+        # --- I-1. ON-SCREEN VISUAL AWARENESS & SCREEN INSPECTION ---
+        elif any(phrase in u for phrase in [
+            "look at my screen", "look at screen", "see my screen", "read my screen",
+            "what's on my screen", "whats on my screen", "what is on my screen",
+            "what's on the screen", "whats on the screen", "what is on the screen",
+            "what is this error", "what's this error", "whats this error", "explain this error",
+            "read this error", "check this error", "debug this error", "read the error",
+            "summarize this page", "summarize this screen", "summarize the screen", "summarize page",
+            "what window is open", "what window is this", "what window is currently open",
+            "what code is open", "what code is currently open", "explain this code",
+            "explain the diagram", "explain the diagram on screen",
+            "look at this window", "inspect this window", "inspect screen", "inspect active window",
+            "look at this", "see this"
+        ]):
+            target_mode = "full_screen" if any(k in u for k in ["full screen", "entire screen", "whole screen", "desktop"]) else "active_window"
+            res = self.tool_registry.execute_tool("inspect_screen", {"user_query": utterance, "target": target_mode})
+            tools_executed.append(res)
+            spoken = res.output_message
+            action_type = "SCREEN_INSPECT"
+
+        # --- I-2. SPATIAL: INSPECT / LOCK / RADAR / ANCHOR ---
+        elif any(w in u for w in ["inspect target", "analyze target", "scan this", "what is this target", "diagnostics", "who is that", "inspect"]):
             effective_target = target_id or "DRONE-STARK-01"
             res = self.tool_registry.execute_tool("inspect_entity", {"target_id": effective_target})
             tools_executed.append(res)
@@ -409,29 +466,158 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             spoken = res.output_message
             action_type = "SPATIAL_ANCHOR"
 
-        # --- J. CONVERSATIONAL / MINIMAL & FUNCTIONAL ---
+        # --- J. GESTURE VOICE CONTROLS ---
+        elif any(w in u for w in ["enable gesture", "enable gestures", "turn on gesture", "turn on gestures", "enable hand tracking", "start hand control", "activate gestures"]):
+            res = self.tool_registry.execute_tool("toggle_os_gestures", {"enabled": True})
+            tools_executed.append(res)
+            spoken = "Hand tracking and OS gesture control enabled, Swastik."
+            action_type = "GESTURE_TOGGLE"
+
+        elif any(w in u for w in ["disable gesture", "disable gestures", "turn off gesture", "turn off gestures", "disable hand tracking", "stop hand control", "deactivate gestures"]):
+            res = self.tool_registry.execute_tool("toggle_os_gestures", {"enabled": False})
+            tools_executed.append(res)
+            spoken = "Hand gesture control disabled. Operating in voice-only mode, Swastik."
+            action_type = "GESTURE_TOGGLE"
+
+        # --- K. REAL-TIME TIME, DATE & CHRONOLOGY ---
+        elif any(w in u for w in ["what time is it", "what's the time", "whats the time", "current time", "tell me the time", "time kya hua", "kitne baje", "kya time ho"]):
+            now = datetime.now()
+            time_str = now.strftime("%I:%M %p").lstrip("0")
+            spoken = f"It's {time_str}, Swastik."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["what day is it", "today's day", "whats the day", "what is today", "aaj kaun sa din"]):
+            now = datetime.now()
+            day_str = now.strftime("%A")
+            spoken = f"Today is {day_str}, Swastik."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["what's the date", "whats the date", "today's date", "todays date", "what is the date", "current date", "aaj kaun si date", "aaj kya date"]):
+            now = datetime.now()
+            day_num = now.day
+            suffix = "th" if 11 <= day_num <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day_num % 10, "th")
+            date_str = now.strftime(f"%A, %B {day_num}{suffix}, %Y")
+            spoken = f"Today is {date_str}, Swastik."
+            action_type = "CHAT"
+
+        # --- L. CREATOR & ORIGIN ---
+        elif any(w in u for w in ["who made you", "who created you", "who built you", "tumhe kisne banaya", "who is your developer", "who is your creator"]):
+            spoken = "You built me, Swastik. Designed and engineered right here in your command center to reset the world on command."
+            action_type = "CHAT"
+
+        # --- M. BILINGUAL & HINGLISH BANTER ---
+        elif any(w in u for w in ["han bhai", "haan bhai", "haa bhai", "ha bhai", "sun bhai", "are bhai", "batao bhai"]):
+            responses = [
+                "Bolo Swastik bhai, kya hukum hai?",
+                "Haan Swastik bhai, sun raha hoon. Bataiye kya karna hai.",
+                "Hazir hoon Swastik bhai. All systems green. What's the plan?",
+            ]
+            spoken = random.choice(responses)
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["kya hal hai", "kya haal hai", "kya chal raha hai", "kya haal", "sab theek", "sab badiya"]):
+            spoken = "Sab first-class hai Swastik bhai. All systems green. What are we building today?"
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["aur batao", "aur sunao", "aur kya chal raha"]):
+            spoken = "Bas aapke next command ka intezaar hai Swastik bhai. Chrome, spatial map, system status, jo bolo."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["theek hai", "accha", "theek h", "thik hai", "sahi hai"]):
+            spoken = "Confirmed Swastik bhai. Ready jab bhi aap kaho."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["shukriya", "dhanyawad", "bahut badhiya"]):
+            spoken = "Hamesha hazir hoon Swastik bhai."
+            action_type = "CHAT"
+
+        # --- N. SCIENCE, TECH & QUANTUM REASONING (ANTIGRAVITY STYLE) ---
+        elif any(w in u for w in ["quantum computing", "quantum computer", "what is quantum"]):
+            spoken = "Quantum computing uses qubits in superposition and entanglement rather than classical bits. It evaluates massive solution spaces in parallel, cracking complex simulations in seconds."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["artificial intelligence", "what is ai", "explain ai"]):
+            spoken = "Artificial intelligence is mathematical modeling of cognitive reasoning, neural architectures, and pattern synthesis at scale. It turns complex sensory entropy into precise autonomous action."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["black hole", "black holes", "event horizon"]):
+            spoken = "A singularity of infinite density where gravitational curvature warps spacetime so severely that even photons cannot escape past its event horizon."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["tell me something cool", "interesting fact", "random fact", "science fact", "cool fact"]):
+            cool_facts = [
+                "Neutron stars are so dense that a single teaspoon of their material would weigh about six billion tons on Earth.",
+                "Photons born in the core of the Sun take over one hundred thousand years to traverse its interior, but only eight minutes to reach your eyes.",
+                "Time moves marginally faster at your head than at your feet because Earth's gravitational field is stronger closer to its center.",
+                "DNA stores information with such extreme density that all the world's data could fit inside a single teaspoon of synthetic DNA."
+            ]
+            spoken = random.choice(cool_facts)
+            action_type = "CHAT"
+
+        # --- O. WITTY TECH JOKES & HIGH-OCTANE MOTIVATION ---
+        elif any(w in u for w in ["tell me a joke", "tell a joke", "make me laugh", "joke sunao", "say something funny"]):
+            jokes = [
+                "Why do programmers prefer dark mode? Because light attracts bugs.",
+                "There are 10 types of people in the world: those who understand binary, and those who don't.",
+                "A SQL query walks into a bar, approaches two tables, and asks: Can I join you?",
+                "Why did the neural network cross the road? To optimize the loss function on the other side."
+            ]
+            spoken = random.choice(jokes)
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["motivate me", "give me motivation", "i feel tired", "i am tired", "thak gaya", "feeling down"]):
+            quotes = [
+                "We don't stop when we're tired, Swastik. We stop when the mission is accomplished. Let's finish what we started.",
+                "Focus on the signal, ignore the noise, Swastik. The vision you're building is worth every hour. Let's make it count.",
+                "Take a breath and reset your state, Swastik. Great systems aren't built in comfort, they're forged through persistence."
+            ]
+            spoken = random.choice(quotes)
+            action_type = "CHAT"
+
+        # --- P. TIME-OF-DAY GREETINGS ---
+        elif any(w in u for w in ["good morning", "subah ho gayi"]):
+            spoken = "Good morning, Swastik. Systems are primed and ready for today's objectives."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["good afternoon"]):
+            spoken = "Good afternoon, Swastik. Standing by for your directives."
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["good evening"]):
+            spoken = "Good evening, Swastik. All telemetry channels active. What's on the agenda?"
+            action_type = "CHAT"
+
+        elif any(w in u for w in ["good night", "shubh ratri", "sleep well"]):
+            spoken = "Good night, Swastik. Powering down non-essential loops. Rest up."
+            action_type = "CHAT"
+
+        # --- Q. CONVERSATIONAL & CORE LIFECYCLE ---
         elif any(w in u for w in ["wake up wrock", "wake up rock", "wake up", "wrock online"]):
             spoken = "Yes, I am online. What's your command, Swastik?"
             action_type = "WAKE_UP"
 
-        elif any(w in u for w in ["how are you", "kese ho", "kaise ho", "kemon acho"]):
-            spoken = "Systems operational. Standing by."
+        elif any(w in u for w in [
+            "how are you", "how are u", "how r u", "how do you do", "how are you doing",
+            "how's it going", "hows it going", "kese ho", "kaise ho", "kemon acho",
+            "are you okay", "you okay", "are you online", "are you there"
+        ]):
+            spoken = "All systems online and ready, Swastik. What would you like to do?"
             action_type = "CHAT"
 
         elif any(w in u for w in ["say something", "kuch bolo", "speak", "talk to me"]):
-            spoken = "Standing by for input."
+            spoken = "Standing by for input, Swastik."
             action_type = "CHAT"
 
         elif any(w in u for w in ["who are you", "what is your name", "what is wrock", "world reset", "wrold reset", "reset on command", "kaun ho", "tum kaun"]):
             spoken = "I am Wrock: World Reset On Command. Your autonomous spatial-AI assistant, Swastik."
             action_type = "CHAT"
 
-        elif any(w in u for w in ["thank you", "thanks", "dhanyawad", "shukriya"]):
+        elif any(w in u for w in ["thank you", "thanks"]):
             spoken = "Always at your service, Swastik."
             action_type = "CHAT"
 
-        elif any(w in u for w in ["good job", "well done", "nice work", "awesome", "great"]):
-            spoken = "Thank you, Swastik. Systems running at peak efficiency."
+        elif any(w in u for w in ["good job", "well done", "nice work", "awesome", "great", "smart"]):
+            spoken = "Thank you, Swastik. Always ready to deliver."
             action_type = "CHAT"
 
         elif any(w in u for w in ["what can you do", "features", "kya kar sakte ho", "help"]):
@@ -449,11 +635,15 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             spoken = res.output_message
 
         else:
-            # Intelligent conversational response without echoing raw user text
-            if any(q in u for q in ["what", "how", "why", "when", "where", "can you"]):
-                spoken = "I can control applications, manage your system status, capture screenshots, and navigate the 3D map. What would you like me to do, Swastik?"
+            # Context-Aware Antigravity Conversational Fallback
+            if any(q in u for q in ["how", "why"]):
+                spoken = "Point me to the specific target or process, Swastik, and I will break it down for you."
+            elif any(q in u for q in ["can you", "could you", "would you"]):
+                spoken = "Without question. State the directive and consider it done, Swastik."
             elif any(w in u for w in ["yes", "yeah", "yep", "sure", "ok", "okay"]):
                 spoken = "Confirmed, Swastik. What directive would you like executed?"
+            elif any(w in u for w in ["no", "nope", "cancel", "nevermind"]):
+                spoken = "Standing down, Swastik."
             else:
                 spoken = "Standing by for your directive, Swastik."
             action_type = "CHAT"
@@ -469,6 +659,55 @@ You have real-time perception over a 3D tactical map, drone feeds, hand tracking
             pov_entity_id=pov_entity,
             action_type=action_type
         )
+
+    async def _route_gemini(
+        self,
+        utterance: str,
+        perception_state: Dict[str, Any],
+        target_candidate: Optional[str]
+    ) -> IntentResponse:
+        system_prompt = self.build_multimodal_system_prompt(perception_state)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent?key={self.gemini_api_key}"
+
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": system_prompt}]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": utterance}]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.35,
+                "maxOutputTokens": 150
+            }
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(url, json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        raw_spoken = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        clean_spoken = re.sub(r"[*#_`>~]", "", raw_spoken).strip()
+                        clean_spoken = re.sub(r"\s+", " ", clean_spoken)
+                        if clean_spoken:
+                            self.memory.add_turn("assistant", clean_spoken)
+                            return IntentResponse(
+                                spoken_text=clean_spoken,
+                                tool_results=[],
+                                hud_alert=None,
+                                target_entity_id=target_candidate,
+                                action_type="CHAT"
+                            )
+        except Exception as e:
+            logger.error(f"Gemini routing error: {e}. Falling back to deterministic engine.")
+
+        return self._route_heuristic(utterance, target_candidate, perception_state)
 
     async def _route_openai(
         self,

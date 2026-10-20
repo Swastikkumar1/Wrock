@@ -17,12 +17,21 @@ try:
 except ImportError:
     cv2 = None
 
-try:
-    import mediapipe as mp
-    mp_hands = mp.solutions.hands
-except Exception:
-    mp = None
-    mp_hands = None
+mp = None
+mp_hands = None
+
+def _get_mp_hands():
+    global mp, mp_hands
+    if mp_hands is None:
+        try:
+            import mediapipe as _mp
+            mp = _mp
+            mp_hands = _mp.solutions.hands
+        except Exception as e:
+            logger.warning(f"MediaPipe hands unavailable: {e}")
+            mp = None
+            mp_hands = None
+    return mp_hands
 
 try:
     from backend.config import settings
@@ -52,18 +61,8 @@ class GestureTracker:
         self.input_controller = input_controller or OSInputController()
         self.is_running: bool = False
 
-        # MediaPipe Hands detector
+        # MediaPipe Hands detector (initialized lazily when camera starts)
         self.hands_detector = None
-        if mp_hands:
-            try:
-                self.hands_detector = mp_hands.Hands(
-                    static_image_mode=False,
-                    max_num_hands=2,
-                    min_detection_confidence=0.65,
-                    min_tracking_confidence=0.60,
-                )
-            except Exception as e:
-                logger.warning(f"Could not initialize MediaPipe Hands: {e}")
 
         # State machines & history buffers
         # 1. Single-hand swipe detection (rolling window of wrist x coordinates)
@@ -86,6 +85,21 @@ class GestureTracker:
         # Telemetry callback for HUD synchronization
         self.on_gesture_telemetry: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
+    def _ensure_hands_detector(self):
+        if self.hands_detector is None:
+            hands_mod = _get_mp_hands()
+            if hands_mod:
+                try:
+                    self.hands_detector = hands_mod.Hands(
+                        static_image_mode=False,
+                        max_num_hands=2,
+                        min_detection_confidence=0.65,
+                        min_tracking_confidence=0.60,
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not initialize MediaPipe Hands: {e}")
+        return self.hands_detector
+
     # -------------------------------------------------------------
     # Frame Processing (OpenCV / Camera)
     # -------------------------------------------------------------
@@ -93,7 +107,8 @@ class GestureTracker:
         """
         Processes a raw BGR camera frame from OpenCV through MediaPipe Hands.
         """
-        if not self.hands_detector or frame_bgr is None:
+        detector = self._ensure_hands_detector()
+        if not detector or frame_bgr is None:
             return {"active": False}
 
         # Flip horizontally for natural mirror behavior
@@ -101,7 +116,7 @@ class GestureTracker:
         rgb_frame = cv2.cvtColor(flipped, cv2.COLOR_BGR2RGB)
         rgb_frame.flags.writeable = False
 
-        results = self.hands_detector.process(rgb_frame)
+        results = detector.process(rgb_frame)
         rgb_frame.flags.writeable = True
 
         hands_list: List[HandPoseFrame] = []

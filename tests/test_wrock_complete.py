@@ -335,3 +335,62 @@ def test_intent_router_chrome_map_spotify_youtube():
 
     asyncio.run(_run())
 
+
+def test_antigravity_voice_persona_and_conversations():
+    """Verify Antigravity voice persona, dynamic time/date, Hinglish banter, and gesture toggles."""
+    async def _run():
+        scene = SpatialSceneGraph()
+        observer = TacticalObserver(CameraPerspectiveMode.ORBITAL)
+        tool_registry = SpatialToolRegistry(scene, observer)
+        memory = WrockMemory()
+        router = WrockIntentRouter(tool_registry, memory, llm_provider="mock")
+
+        # 1. Creator origin check
+        res_creator = await router.route_intent("who made you", {})
+        assert "Swastik" in res_creator.spoken_text
+        assert res_creator.action_type == "CHAT"
+
+        # 2. Hinglish banter
+        res_hinglish = await router.route_intent("han bhai", {})
+        assert any(w in res_hinglish.spoken_text.lower() for w in ["swastik", "bhai", "hukum"])
+
+        res_haal = await router.route_intent("kya haal hai", {})
+        assert "swastik" in res_haal.spoken_text.lower()
+
+        # 3. Dynamic time and date
+        res_time = await router.route_intent("what time is it", {})
+        assert "Swastik" in res_time.spoken_text
+        assert any(m in res_time.spoken_text.lower() for m in ["am", "pm", ":"])
+
+        res_date = await router.route_intent("what's the date", {})
+        assert "Swastik" in res_date.spoken_text
+        assert "202" in res_date.spoken_text
+
+        # 4. Science / Tech insights
+        res_quantum = await router.route_intent("what is quantum computing", {})
+        assert "qubit" in res_quantum.spoken_text.lower() or "superposition" in res_quantum.spoken_text.lower()
+
+        # 5. Jokes and Motivation
+        res_joke = await router.route_intent("tell me a joke", {})
+        assert len(res_joke.spoken_text) > 10
+
+        res_motivate = await router.route_intent("motivate me", {})
+        assert "Swastik" in res_motivate.spoken_text
+
+        # 6. Gesture voice controls
+        res_enable_g = await router.route_intent("enable gestures", {})
+        assert res_enable_g.action_type == "GESTURE_TOGGLE"
+        assert "enabled" in res_enable_g.spoken_text.lower()
+
+        res_disable_g = await router.route_intent("disable gestures", {})
+        assert res_disable_g.action_type == "GESTURE_TOGGLE"
+        assert "disabled" in res_disable_g.spoken_text.lower()
+
+        # 7. Antigravity Fallback
+        res_fallback = await router.route_intent("can you build a spacecraft", {})
+        assert "Swastik" in res_fallback.spoken_text
+        assert "king" not in res_fallback.spoken_text.lower()
+
+    asyncio.run(_run())
+
+

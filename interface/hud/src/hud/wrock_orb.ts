@@ -13,7 +13,7 @@ export class WrockOrbVisualizer {
   constructor() {
     this.group = new THREE.Group();
     this.group.name = "WrockOrbGroup";
-    this.group.position.set(0, 1.8, 0);
+    this.group.position.set(0, 2.5, 0);
 
     // Glowing Inner Energy Sphere
     const coreGeo = new THREE.SphereGeometry(0.5, 24, 24);

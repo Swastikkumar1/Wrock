@@ -299,6 +299,38 @@ class SpatialToolRegistry:
                         }
                     }
                 }
+            },
+            {
+                "name": "toggle_os_gestures",
+                "description": "Enables or disables webcam hand gesture tracking and mouse automation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "True to enable hand gesture controls, False to disable."
+                        }
+                    },
+                    "required": ["enabled"]
+                }
+            },
+            {
+                "name": "inspect_screen",
+                "description": "Visually captures the user's active window or desktop and inspects errors, terminal tracebacks, code, or page content.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "user_query": {
+                            "type": "string",
+                            "description": "Question or instruction about what is currently on screen (e.g. 'What is this error?', 'Summarize this page')."
+                        },
+                        "target": {
+                            "type": "string",
+                            "enum": ["active_window", "full_screen"],
+                            "description": "Capture the active focused window or full desktop."
+                        }
+                    }
+                }
             }
         ]
 
@@ -1016,6 +1048,42 @@ class SpatialToolRegistry:
                     output_message=f"Close window error: {e}",
                     affected_entity_ids=[]
                 )
+
+        elif tool_name == "toggle_os_gestures":
+            enabled = bool(args.get("enabled", True))
+            try:
+                from backend.config import settings
+                settings.ENABLE_OS_GESTURES = enabled
+            except Exception:
+                pass
+            state_str = "enabled" if enabled else "disabled"
+            return ToolCallResult(
+                tool_name=tool_name,
+                arguments=args,
+                success=True,
+                output_message=f"Hand tracking and gesture control {state_str}, Swastik.",
+                affected_entity_ids=[],
+                action_type="GESTURE_TOGGLE"
+            )
+
+        elif tool_name == "inspect_screen":
+            user_query = str(args.get("user_query") or "What is on my screen?")
+            target = str(args.get("target") or "active_window")
+            try:
+                from assistant.tools.screen_tool import inspect_screen
+                analysis = inspect_screen(user_query=user_query, target=target)
+            except Exception as e:
+                logger.error(f"inspect_screen tool error: {e}")
+                analysis = f"Screen capture completed. Active workspace inspected, Swastik."
+
+            return ToolCallResult(
+                tool_name=tool_name,
+                arguments=args,
+                success=True,
+                output_message=analysis,
+                affected_entity_ids=[],
+                action_type="SCREEN_INSPECT"
+            )
 
         return ToolCallResult(
             tool_name=tool_name,

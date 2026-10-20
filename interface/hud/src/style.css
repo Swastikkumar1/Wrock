@@ -173,7 +173,8 @@ body, html {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  width: min(95vw, 1050px);
+  width: min(92vw, 960px);
+  max-width: 960px;
   background: var(--bg-hud);
   border: 1px solid var(--border-cyan);
   backdrop-filter: blur(20px);
@@ -418,23 +419,25 @@ body, html {
 }
 
 /* ============================================================== */
-/* OPTICAL FINGER TRACKING PIP (BOTTOM-LEFT)                      */
+/* OPTICAL FINGER TRACKING PIP (TOP-LEFT HUD)                     */
 /* ============================================================== */
 .webcam-pip-container {
   pointer-events: auto;
   position: fixed;
-  bottom: 115px;
-  left: 20px;
-  width: 190px;
-  height: 145px;
-  background: #000000;
+  top: 70px;
+  left: 24px;
+  width: 210px;
+  height: 155px;
+  background: rgba(3, 8, 16, 0.92);
   border: 1px solid var(--primary-cyan);
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 0 25px rgba(0, 229, 255, 0.35);
+  box-shadow: 0 0 25px rgba(0, 229, 255, 0.35), 0 8px 30px rgba(0, 0, 0, 0.75);
   display: flex;
   flex-direction: column;
-  z-index: 90;
+  z-index: 80;
+  backdrop-filter: blur(12px);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .pip-header {
@@ -561,6 +564,39 @@ body, html {
   font-weight: 600;
 }
 
+@media (max-width: 1100px) {
+  .dock-action-pill .pill-text {
+    font-size: 10px;
+  }
+  .dock-action-pill {
+    padding: 6px 10px;
+  }
+  .middle-bottom-dock {
+    gap: 10px;
+    padding: 8px 14px;
+  }
+}
+
+@media (max-height: 740px) {
+  .middle-bottom-dock {
+    bottom: 10px;
+    padding: 6px 14px;
+  }
+  .webcam-pip-container {
+    top: 60px;
+    width: 180px;
+    height: 135px;
+  }
+  .dock-reactor-wrapper {
+    width: 55px;
+    height: 55px;
+  }
+  #dock-arc-reactor {
+    width: 55px;
+    height: 55px;
+  }
+}
+
 @media (max-width: 800px) {
   .middle-bottom-dock {
     flex-direction: column;
@@ -570,5 +606,9 @@ body, html {
   .dock-quick-actions {
     flex-wrap: wrap;
     justify-content: center;
+  }
+  .webcam-pip-container {
+    width: 160px;
+    height: 120px;
   }
 }

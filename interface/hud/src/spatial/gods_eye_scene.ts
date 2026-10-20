@@ -9,9 +9,9 @@ export class GodsEyeScene {
   private canvas: HTMLCanvasElement;
 
   public currentMode: CameraMode = "ORBITAL";
-  private targetCameraPos: THREE.Vector3 = new THREE.Vector3(14, 12, 14);
-  private targetLookAt: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
-  private currentLookAt: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
+  private targetCameraPos: THREE.Vector3 = new THREE.Vector3(13, 13, 13);
+  private targetLookAt: THREE.Vector3 = new THREE.Vector3(0, 1.4, 0);
+  private currentLookAt: THREE.Vector3 = new THREE.Vector3(0, 1.4, 0);
 
   // Optical Pinch Zoom & Pan State
   public zoomLevel: number = 1.0;
@@ -31,7 +31,7 @@ export class GodsEyeScene {
     // Camera setup
     const aspect = window.innerWidth / window.innerHeight;
     this.camera = new THREE.PerspectiveCamera(CONFIG.CAMERA.FOV, aspect, CONFIG.CAMERA.NEAR, CONFIG.CAMERA.FAR);
-    this.camera.position.set(14, 12, 14);
+    this.camera.position.set(13, 13, 13);
 
     // WebGL Renderer setup
     this.renderer = new THREE.WebGLRenderer({
@@ -150,8 +150,8 @@ export class GodsEyeScene {
 
       case "ORBITAL":
         // 45-degree angled tactical isometric view
-        this.targetCameraPos.set(14.0, 12.0, 14.0);
-        this.targetLookAt.set(0, 1, 0);
+        this.targetCameraPos.set(13.0, 13.0, 13.0);
+        this.targetLookAt.set(0, 1.4, 0);
         break;
 
       case "TACTICAL_DRONE":

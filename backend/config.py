@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     MAX_TRACKED_ENTITIES: int = 64
 
     # OS-Level Gesture Control & Sensitivity Settings
-    ENABLE_OS_GESTURES: bool = True
+    ENABLE_OS_GESTURES: bool = False
     CAMERA_INDEX: int = 0
     GESTURE_COOLDOWN_MS: int = 600             # 600ms cooldown for wave/swipes
     SMOOTHING_FACTOR: float = 0.25             # Exponential Moving Average factor (alpha)

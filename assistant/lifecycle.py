@@ -65,13 +65,14 @@ class AssistantLifecycle:
         intent_router=None,
         tts_client: Optional[ElevenLabsTTSClient] = None,
         broadcast_callback: Optional[Callable[[str, Dict[str, Any]], Awaitable[None]]] = None,
+        initial_state: LifecycleState = LifecycleState.SLEEPING,
     ):
         self.intent_router = intent_router
         self.tts_client = tts_client or ElevenLabsTTSClient()
         self.broadcast_callback = broadcast_callback
 
         # State
-        self.state: LifecycleState = LifecycleState.SLEEPING
+        self.state: LifecycleState = initial_state
         self.cancellation_token = CancellationToken()
         self.last_user_activity: float = time.time()
         self.active_execution_task: Optional[asyncio.Task] = None
@@ -150,16 +151,20 @@ class AssistantLifecycle:
         lower_text = raw_text.lower()
         now = time.time()
 
+        # Check for instant barge-in / stop command in ANY state
+        is_stop_command = bool(re.search(
+            r"^\s*(?:please\s+)?(?:stop(?:\s+it|\s+that|\s+talking|\s+now)?|shut\s+up|silence|quiet|cancel|hold\s+on|pause|ruk\s+jao|bas\s+karo)\s*$",
+            lower_text
+        ))
+        if is_stop_command:
+            await self.interrupt_speech(reason="user_stop_command")
+            await self.set_state(LifecycleState.LISTENING)
+            return {"action": "interrupted", "reply": "Stopped."}
+
         # Check for instant barge-in if assistant is actively speaking
         if self.state == LifecycleState.SPEAKING:
-            is_interrupt_phrase = any(w in lower_text.split() for w in self.interrupt_words)
-            # Interrupt on either an explicit interrupt word or any new command input
+            # Interrupt on any new speech input
             await self.interrupt_speech(reason="user_speaking")
-
-            if is_interrupt_phrase:
-                # User just wanted Wrock to stop talking
-                await self.set_state(LifecycleState.LISTENING)
-                return {"action": "interrupted", "text": "Stopped."}
 
         # Check idle timeout if active (only if idle_timeout > 0)
         if self.state != LifecycleState.SLEEPING:
@@ -170,12 +175,18 @@ class AssistantLifecycle:
                 return None
 
         # ---------------------------------------------------------
-        # A. Sleeping State: Wake-Phrase Required
-        # Matches "wake up", "wake up block", "wake up wrock", "hey wrock", etc.
+        # A. Sleeping State: Wake-Phrase or Actionable Intent Required
         # ---------------------------------------------------------
         if self.state == LifecycleState.SLEEPING:
             wake_regex = r"\b(?:wake\s+up(?:\s+(?:wrock|rock|brok|block|lock|work|doc|buddy|jarvis))?|(?:hey|hi|hello|ok|okay)\s+(?:wrock|rock|brok|block|jarvis))\b"
             is_wake = bool(re.search(wake_regex, lower_text))
+
+            # Auto-wake for direct conversational questions or explicit 'I said' follow-ups
+            has_direct_query = any(phrase in lower_text for phrase in [
+                "how are you", "how are u", "how r u", "who are you", "what can you do",
+                "i said", "i told", "are you online", "are you there", "kese ho", "kaise ho",
+                "kya kar rahe ho", "sun rahe ho", "can you hear me"
+            ])
 
             if is_wake:
                 await self.wake_up()
@@ -183,6 +194,11 @@ class AssistantLifecycle:
 
                 if command_after_wake and is_final:
                     return await self.execute_command(command_after_wake, perception_snapshot)
+                return {"action": "woken", "reply": "Yes, I am online. What's your command, Swastik?"}
+            elif has_direct_query:
+                await self.wake_up(silent=True)
+                if is_final:
+                    return await self.execute_command(lower_text, perception_snapshot)
                 return {"action": "woken", "reply": "Yes, I am online. What's your command, Swastik?"}
             else:
                 # Discard all ambient speech when sleeping
@@ -248,8 +264,13 @@ class AssistantLifecycle:
         if not command_text.strip():
             return {"action": "none"}
 
-        now = time.time()
         norm_cmd = command_text.strip().lower()
+        if re.search(r"^\s*(?:please\s+)?(?:stop(?:\s+it|\s+that|\s+talking|\s+now)?|shut\s+up|silence|quiet|cancel|hold\s+on|pause|ruk\s+jao|bas\s+karo)\s*$", norm_cmd):
+            await self.interrupt_speech(reason="user_stop_command")
+            await self.set_state(LifecycleState.LISTENING)
+            return {"action": "interrupted", "reply": "Stopped."}
+
+        now = time.time()
         if norm_cmd == self._last_executed_cmd and (now - self._last_executed_time) < 2.0:
             logger.info(f"Debounce: Ignoring duplicate execution of '{command_text}' within 2.0s window.")
             return {"action": "debounced"}
@@ -264,44 +285,61 @@ class AssistantLifecycle:
 
         snapshot = perception_snapshot or {}
 
+        # Immediate conversational acknowledgment for on-screen visual awareness
+        lower_cmd = command_text.lower()
+        if any(phrase in lower_cmd for phrase in [
+            "look at my screen", "look at screen", "see my screen", "read my screen",
+            "what's on my screen", "whats on my screen", "what is on my screen",
+            "what's on the screen", "whats on the screen", "what is on the screen",
+            "what is this error", "what's this error", "explain this error", "read this error",
+            "summarize this page", "summarize this screen", "what window is open", "what code is currently open",
+            "inspect screen", "look at this window", "inspect this window"
+        ]):
+            await self._broadcast("ASSISTANT_FEEDBACK", {"text": "Looking at your screen..."})
+            await self.speak_direct("Looking at your screen...")
+
         # Run routing and execution in background task
-        async def _run_async_tool():
-            try:
-                if self.intent_router:
-                    intent_resp = await self.intent_router.route_intent(command_text, snapshot)
-                    spoken_reply = self._clean_reply(intent_resp.spoken_text)
+        try:
+            if self.intent_router:
+                intent_resp = await self.intent_router.route_intent(command_text, snapshot)
+                spoken_reply = self._clean_reply(intent_resp.spoken_text)
 
-                    # Check cancellation before speaking
-                    if not self.cancellation_token.is_cancelled and spoken_reply:
-                        await self.speak_direct(spoken_reply)
+                # Check cancellation before speaking; do not speak out loud if stopped
+                if not self.cancellation_token.is_cancelled and spoken_reply and spoken_reply.lower() != "stopped.":
+                    await self.speak_direct(spoken_reply)
 
-                    # Broadcast intent results
-                    await self._broadcast("VOICE_INTENT", {
-                        "spoken_text": spoken_reply,
-                        "hud_alert": intent_resp.hud_alert or spoken_reply,
-                        "target_entity_id": intent_resp.target_entity_id,
-                        "camera_mode": intent_resp.camera_mode,
-                        "pov_entity_id": intent_resp.pov_entity_id,
-                        "action_type": intent_resp.action_type,
-                        "tools_called": [t.tool_name for t in intent_resp.tool_results],
-                    })
+                # Broadcast intent results to spatial clients
+                await self._broadcast("VOICE_INTENT", {
+                    "spoken_text": spoken_reply,
+                    "hud_alert": intent_resp.hud_alert or spoken_reply,
+                    "target_entity_id": intent_resp.target_entity_id,
+                    "camera_mode": intent_resp.camera_mode,
+                    "pov_entity_id": intent_resp.pov_entity_id,
+                    "action_type": intent_resp.action_type,
+                    "tools_called": [t.tool_name for t in intent_resp.tool_results],
+                })
 
-                    return intent_resp
-                else:
-                    fallback_reply = f"Executed: {command_text}."
-                    await self.speak_direct(fallback_reply)
-                    return {"output": fallback_reply}
-            except asyncio.CancelledError:
-                logger.info(f"Task for '{command_text}' cancelled.")
-            except Exception as e:
-                logger.error(f"Error executing command '{command_text}': {e}", exc_info=True)
-                await self.speak_direct("Error executing action.")
-            finally:
-                if self.state == LifecycleState.THINKING:
-                    await self.set_state(LifecycleState.LISTENING)
-
-        self.active_execution_task = asyncio.create_task(_run_async_tool())
-        return {"action": "dispatched", "command": command_text}
+                return {
+                    "action": "dispatched",
+                    "command": command_text,
+                    "reply": spoken_reply,
+                    "action_type": intent_resp.action_type,
+                    "hud_alert": intent_resp.hud_alert or spoken_reply,
+                }
+            else:
+                fallback_reply = f"Executed: {command_text}."
+                await self.speak_direct(fallback_reply)
+                return {"action": "dispatched", "command": command_text, "reply": fallback_reply}
+        except asyncio.CancelledError:
+            logger.info(f"Task for '{command_text}' cancelled.")
+            return {"action": "cancelled"}
+        except Exception as e:
+            logger.error(f"Error executing command '{command_text}': {e}", exc_info=True)
+            await self.speak_direct("Error executing action.")
+            return {"action": "error", "error": str(e)}
+        finally:
+            if self.state == LifecycleState.THINKING:
+                await self.set_state(LifecycleState.LISTENING)
 
     # -------------------------------------------------------------
     # 5. Non-Blocking TTS Speech Output (ElevenLabs + Web Speech)

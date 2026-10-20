@@ -92,6 +92,7 @@ assistant_lifecycle = AssistantLifecycle(
     intent_router=intent_router,
     tts_client=elevenlabs_tts,
     broadcast_callback=event_bus.broadcast,
+    initial_state=LifecycleState.LISTENING,
 )
 
 # Background High-Throughput Kinematics Loop
@@ -170,7 +171,7 @@ def health_check():
         "observer_mode": observer.current_mode.value,
         "llm_provider": settings.LLM_PROVIDER,
         "lifecycle_state": assistant_lifecycle.state.value,
-        "os_gestures_enabled": getattr(settings, "ENABLE_OS_GESTURES", True),
+        "os_gestures_enabled": getattr(settings, "ENABLE_OS_GESTURES", False),
     }
 
 @app.get("/api/scene")
@@ -224,7 +225,7 @@ def get_gesture_settings():
         "smoothing_factor": getattr(settings, "SMOOTHING_FACTOR", 0.25),
         "pinch_threshold": getattr(settings, "PINCH_THRESHOLD", 0.045),
         "gesture_cooldown_ms": getattr(settings, "GESTURE_COOLDOWN_MS", 600),
-        "enable_os_gestures": getattr(settings, "ENABLE_OS_GESTURES", True),
+        "enable_os_gestures": getattr(settings, "ENABLE_OS_GESTURES", False),
         "camera_running": gesture_tracker.is_running,
     }
 
@@ -278,7 +279,7 @@ async def spatial_websocket(websocket: WebSocket):
                 handedness = payload.get("handedness", "Right")
 
                 # If OS-level gesture control is enabled, process through full GestureTracker
-                if getattr(settings, "ENABLE_OS_GESTURES", True) and raw_landmarks:
+                if getattr(settings, "ENABLE_OS_GESTURES", False) and raw_landmarks:
                     now = time.time()
                     hands_poses: List[HandPoseFrame] = []
 
@@ -334,9 +335,13 @@ async def spatial_websocket(websocket: WebSocket):
             elif msg_type == "VOICE_TRANSCRIPT":
                 text = payload.get("text", "").strip()
                 is_final = payload.get("is_final", False)
+                force_exec = payload.get("force_exec", False)
 
                 synchronizer.update_audio(text, is_listening=True, is_speaking=assistant_lifecycle.state == LifecycleState.SPEAKING)
                 snapshot = synchronizer.get_snapshot().to_dict()
+
+                if force_exec and assistant_lifecycle.state == LifecycleState.SLEEPING:
+                    await assistant_lifecycle.wake_up(silent=True)
 
                 # Process through AssistantLifecycle (handles strict wake-up, barge-in, persistent session)
                 await assistant_lifecycle.handle_user_transcript(text, is_final, snapshot)

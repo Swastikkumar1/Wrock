@@ -9,6 +9,9 @@ export class VoiceController {
   private synth: SpeechSynthesis | null = null;
   private preferredVoice: SpeechSynthesisVoice | null = null;
   private currentAudioElement: HTMLAudioElement | null = null;
+  private lastSpokenText: string = "";
+  private currentUtterance: SpeechSynthesisUtterance | null = null;
+  private speechSafetyTimer: any = null;
 
   // Real Web Audio API microphone stream & frequency analyser
   private audioStream: MediaStream | null = null;
@@ -147,14 +150,29 @@ export class VoiceController {
         if (!rawText) return;
 
         // INSTANT SPEECH INTERRUPTION ("BARGE-IN"):
-        // If Wrock is actively speaking and detects user voice, immediately abort audio!
+        // Only abort speech if user gives an explicit interrupt keyword or distinct command,
+        // and ignore acoustic echo of Wrock's own utterance from the laptop speakers.
         if (this.isSpeaking) {
-          console.log("Barge-In detected! Aborting active speech for user input:", rawText);
-          this.abortSpeech();
-          if (this.onBargeInCallback) {
-            this.onBargeInCallback(rawText);
+          const lower = rawText.toLowerCase();
+          // Echo is ONLY true if transcript is virtually identical to what was just spoken
+          const isEcho = Boolean(
+            this.lastSpokenText &&
+            (lower === this.lastSpokenText ||
+             (this.lastSpokenText.length > 8 && lower.length > 8 && this.lastSpokenText.startsWith(lower)))
+          );
+
+          const isInterruptKeyword = /\b(stop|cancel|quiet|hold\s+on|shut\s+up|silence|wait|pause|ruk\s+jao|bas\s+karo)\b/i.test(lower);
+
+          if (!isEcho && (isInterruptKeyword || isFinal)) {
+            console.log("Barge-In detected! Aborting active speech for user input:", rawText);
+            this.abortSpeech();
+            if (this.onBargeInCallback) {
+              this.onBargeInCallback(rawText);
+            }
+          } else if (isEcho) {
+            // Drop speaker acoustic echo
+            return;
           }
-          // Do not drop the utterance - proceed to deliver transcript to handler
         }
 
         if (this.onTranscriptCallback) {
@@ -381,6 +399,11 @@ export class VoiceController {
    * Instantly aborts any active speech output (browser synthesis or audio element)
    */
   public abortSpeech(): void {
+    if (this.speechSafetyTimer) {
+      clearTimeout(this.speechSafetyTimer);
+      this.speechSafetyTimer = null;
+    }
+
     if (this.synth) {
       try {
         this.synth.cancel();
@@ -399,6 +422,8 @@ export class VoiceController {
       }
     }
 
+    this.currentUtterance = null;
+    this.lastSpokenText = "";
     this.isSpeaking = false;
     this.notifyState(false);
   }
@@ -415,25 +440,19 @@ export class VoiceController {
       this.isSpeaking = true;
       this.notifyState(true);
 
-      audio.onended = () => {
+      const finish = () => {
         this.isSpeaking = false;
         this.currentAudioElement = null;
+        this.lastSpokenText = "";
         this.notifyState(false);
         resolve();
       };
 
-      audio.onerror = () => {
-        this.isSpeaking = false;
-        this.currentAudioElement = null;
-        this.notifyState(false);
-        resolve();
-      };
+      audio.onended = finish;
+      audio.onerror = finish;
 
       audio.play().catch(() => {
-        this.isSpeaking = false;
-        this.currentAudioElement = null;
-        this.notifyState(false);
-        resolve();
+        finish();
       });
     });
   }
@@ -444,30 +463,45 @@ export class VoiceController {
     this.abortSpeech(); // Clear any ongoing speech
     if (!this.synth) return;
 
+    this.lastSpokenText = text.toLowerCase().trim();
     this.isSpeaking = true;
     this.notifyState(true);
 
     const utterance = new SpeechSynthesisUtterance(text);
+    this.currentUtterance = utterance; // Retain reference to prevent Chromium GC bug
     if (this.preferredVoice) {
       utterance.voice = this.preferredVoice;
     }
     utterance.pitch = 0.92; // Deep, commanding resonant tone
     utterance.rate = 1.02;  // Articulate, confident cadence
 
+    const cleanup = () => {
+      if (this.speechSafetyTimer) {
+        clearTimeout(this.speechSafetyTimer);
+        this.speechSafetyTimer = null;
+      }
+      this.currentUtterance = null;
+      this.lastSpokenText = "";
+      this.isSpeaking = false;
+      this.notifyState(false);
+    };
+
     utterance.onstart = () => {
       this.isSpeaking = true;
       this.notifyState(true);
     };
 
-    utterance.onend = () => {
-      this.isSpeaking = false;
-      this.notifyState(false);
-    };
+    utterance.onend = cleanup;
+    utterance.onerror = cleanup;
 
-    utterance.onerror = () => {
-      this.isSpeaking = false;
-      this.notifyState(false);
-    };
+    // Safety watchdog timer: Chromium SpeechSynthesisUtterance occasionally never fires onend
+    const estDurationMs = Math.max(1500, (text.split(" ").length * 360) + 1000);
+    this.speechSafetyTimer = setTimeout(() => {
+      if (this.isSpeaking && this.currentUtterance === utterance) {
+        console.warn("Speech synthesis safety watchdog triggered. Resetting speaking state.");
+        cleanup();
+      }
+    }, estDurationMs);
 
     this.synth.speak(utterance);
   }

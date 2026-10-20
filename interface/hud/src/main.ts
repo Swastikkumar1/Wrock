@@ -8,6 +8,7 @@ import { CommandDockManager } from "./hud/command_dock";
 import { SpatialWebSocketClient } from "./network/ws_client";
 import { sfx } from "./audio/sound_effects";
 import { GestureData, CameraMode } from "./types";
+import { CONFIG } from "./config";
 
 class WrockApp {
   private canvas: HTMLCanvasElement;
@@ -182,9 +183,17 @@ class WrockApp {
     this.voiceController.onTranscriptCallback = (transcript: string, isFinal: boolean) => {
       this.commandDock.setUserTranscript(transcript, !isFinal);
 
-      // Stream real-time transcript to backend so AssistantLifecycle can handle
-      // wake-word, barge-in, and decoupled tool execution exactly once
-      this.wsClient.sendVoiceTranscript(transcript, isFinal);
+      if (isFinal) {
+        const text = transcript.trim();
+        if (!text) return;
+
+        // Process directly through handleCommand so both voice & typed directives
+        // execute identical high-speed command routing, auto-wake, and instant interrupt logic
+        this.handleCommand(text);
+      } else {
+        // Stream interim transcript for visual feedback
+        this.wsClient.sendVoiceTranscript(transcript, false, false);
+      }
     };
 
     // INSTANT SPEECH INTERRUPTION ("BARGE-IN"):
@@ -386,7 +395,18 @@ class WrockApp {
       /\b(wrock|jarvis)\b/i.test(u);
 
     const hasActionableIntent =
-      /\b(open|launch|start|screenshot|status|laptop|battery|cpu|gpu|temp|volume|mute|unmute|lock|spotify|youtube|chrome|cursor|reddit|search|close|kill|turn off|turn off something|yes|do it|sure|zoom|map)\b/i.test(u);
+      /\b(how|what|who|why|where|hello|hi|hey|open|launch|start|screenshot|status|laptop|battery|cpu|gpu|temp|temperature|volume|mute|unmute|lock|spotify|youtube|chrome|cursor|vscode|reddit|search|find|locate|close|kill|turn\s+off|yes|do it|sure|zoom|map|maps|google|inspect|look\s+at)\b/i.test(u) ||
+      /\b(?:i\s+(?:said|told|asked))\b/i.test(u);
+
+    // Instant stop check even if asleep or thinking
+    const isStopWord = /^\s*(?:please\s+)?(?:stop(?:\s+it|\s+that|\s+talking|\s+now)?|shut\s+up|silence|quiet|cancel|hold\s+on|pause|ruk\s+jao|bas\s+karo)\s*$/i.test(u);
+    if (isStopWord) {
+      this.voiceController.abortSpeech();
+      this.wsClient.sendSpeechInterrupt("user_command");
+      this.commandDock.setVoiceState("LISTENING");
+      this.commandDock.setWrockResponse("Stopped.");
+      return;
+    }
 
     if (!this.isAwake) {
       if (isWakePhrase || hasActionableIntent) {
@@ -410,7 +430,7 @@ class WrockApp {
     const targetCmd = cleaned || u;
 
     // Handle instant interrupt words
-    if (targetCmd === "stop" || targetCmd === "quiet" || targetCmd === "cancel" || targetCmd === "hold on") {
+    if (/^\s*(?:please\s+)?(?:stop(?:\s+it|\s+that|\s+talking|\s+now)?|shut\s+up|silence|quiet|cancel|hold\s+on|pause|ruk\s+jao|bas\s+karo)\s*$/i.test(targetCmd)) {
       this.voiceController.abortSpeech();
       this.wsClient.sendSpeechInterrupt("user_command");
       this.commandDock.setVoiceState("LISTENING");
@@ -440,8 +460,46 @@ class WrockApp {
     // 2. Send to Backend Asynchronously (Backend handles intent routing & voice output without duplicate client synthesis)
     if (this.wsClient.getIsConnected()) {
       this.wsClient.sendCommand(targetCmd);
+      this.wsClient.sendVoiceTranscript(targetCmd, true, true);
     } else {
-      this.speak(`Reconnecting to backend core.`);
+      this.executeFallback(targetCmd);
+    }
+  }
+
+  private async executeFallback(cmd: string) {
+    const u = cmd.toLowerCase();
+
+    // 1. Try REST HTTP endpoint
+    try {
+      const res = await fetch(`${CONFIG.HTTP_API_URL}/api/voice/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd, is_final: true }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && (data.reply || data.spoken_text)) {
+          this.speak(data.reply || data.spoken_text);
+          return;
+        }
+      }
+    } catch (e) {
+      // Backend HTTP endpoint not yet reachable
+    }
+
+    // 2. Instant Local Intelligent Persona Fallback
+    if (u.includes("how are you") || u.includes("how are u") || u.includes("how r u") || u.includes("kese ho") || u.includes("kaise ho")) {
+      this.speak("All systems online and ready, Swastik. What would you like to do?");
+    } else if (u.includes("who are you") || u.includes("what is your name") || u.includes("tum kaun")) {
+      this.speak("I am Wrock, your autonomous Spatial-AI assistant, Swastik.");
+    } else if (u.includes("what can you do") || u.includes("features") || u.includes("help")) {
+      this.speak("I control applications, monitor system health, take screenshots, manage volume, and navigate the 3D map. What shall we do, Swastik?");
+    } else if (u.includes("hello") || u.includes("hey") || u.includes("hi") || u.includes("namaste")) {
+      this.speak("Hello Swastik! Standing by for your directive.");
+    } else if (u.includes("thank you") || u.includes("thanks")) {
+      this.speak("Always at your service, Swastik.");
+    } else {
+      this.speak("Reconnecting to backend intelligence core... Standing by.");
     }
   }
 

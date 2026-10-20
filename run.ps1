@@ -86,7 +86,7 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList "-Command", "cd '$Hud
 
 # 5. Wait for servers to be 100% verified online before launching dock
 Write-Host "Verifying backend online (Port 8000)..." -NoNewline -ForegroundColor White
-$backendReady = Test-PortReady 8000 20
+$backendReady = Test-PortReady 8000 35
 if ($backendReady) {
     Write-Host " [ONLINE]" -ForegroundColor Green
 } else {
@@ -94,7 +94,7 @@ if ($backendReady) {
 }
 
 Write-Host "Verifying HUD interface ready (Port 3000)..." -NoNewline -ForegroundColor White
-$hudReady = Test-PortReady 3000 20
+$hudReady = Test-PortReady 3000 35
 if ($hudReady) {
     Write-Host " [ONLINE]" -ForegroundColor Green
 } else {
